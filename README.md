@@ -1,4 +1,4 @@
-# Pulse AI 🚀
+# Pulse AI 
 
 ### An Intelligent Timesheet & Invoicing Assistant
 
