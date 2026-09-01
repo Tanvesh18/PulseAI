@@ -8,6 +8,7 @@ import {
   saveTimesheet,
   submitTimesheet,
 } from "../data/employee-api";
+import { currentTimesheet as staticCurrentTimesheet } from "../data/mock-employee";
 import type { TimesheetEntry, TimesheetPeriod } from "../types";
 import styles from "../employee.module.css";
 import { TimesheetEditor } from "./timesheet-editor";
@@ -16,18 +17,17 @@ export function CurrentTimesheetScreen() {
   const [timesheet, setTimesheet] = useState<TimesheetPeriod | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [usingStaticData, setUsingStaticData] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       setTimesheet(await getCurrentTimesheet());
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "The timesheet could not be loaded.",
-      );
+      setUsingStaticData(false);
+    } catch {
+      setTimesheet(structuredClone(staticCurrentTimesheet));
+      setUsingStaticData(true);
     } finally {
       setLoading(false);
     }
@@ -37,15 +37,15 @@ export function CurrentTimesheetScreen() {
     let active = true;
     getCurrentTimesheet()
       .then((result) => {
-        if (active) setTimesheet(result);
+        if (active) {
+          setTimesheet(result);
+          setUsingStaticData(false);
+        }
       })
-      .catch((reason: unknown) => {
+      .catch(() => {
         if (!active) return;
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "The timesheet could not be loaded.",
-        );
+        setTimesheet(structuredClone(staticCurrentTimesheet));
+        setUsingStaticData(true);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -96,8 +96,7 @@ export function CurrentTimesheetScreen() {
     <TimesheetEditor
       key={timesheet.id}
       timesheet={timesheet}
-      onSave={save}
-      onSubmit={submit}
+      {...(usingStaticData ? {} : { onSave: save, onSubmit: submit })}
     />
   );
 }

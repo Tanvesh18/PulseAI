@@ -25,6 +25,20 @@ function devConfig(): ConfigService {
 }
 
 describe("EmployeeAuthGuard", () => {
+  it("uses the seeded employee by default in local development", async () => {
+    const request = { headers: {} } as Request;
+    const config = { get: () => undefined } as unknown as ConfigService;
+
+    await expect(
+      new EmployeeAuthGuard(config, new StaticDataService()).canActivate(
+        contextFor(request),
+      ),
+    ).resolves.toBe(true);
+    expect(request.actor.userId).toBe(
+      "00000000-0000-4000-8000-000000000201",
+    );
+  });
+
   it("resolves the explicitly enabled development employee", async () => {
     const request = { headers: {} } as Request;
     const allowed = await new EmployeeAuthGuard(
@@ -48,5 +62,17 @@ describe("EmployeeAuthGuard", () => {
         contextFor({ headers: {} }),
       ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it("still requires a bearer token in production", async () => {
+    const config = {
+      get: (key: string) => (key === "NODE_ENV" ? "production" : undefined),
+    } as ConfigService;
+
+    await expect(
+      new EmployeeAuthGuard(config, new StaticDataService()).canActivate(
+        contextFor({ headers: {} }),
+      ),
+    ).rejects.toThrow("A bearer access token is required.");
   });
 });

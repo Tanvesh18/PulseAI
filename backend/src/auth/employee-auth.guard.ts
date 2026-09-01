@@ -62,9 +62,17 @@ export class EmployeeAuthGuard implements CanActivate {
       }
     }
 
-    if (this.config.get<string>("ALLOW_DEV_AUTH") === "true") {
-      const devSubject = this.config.get<string>("DEV_AUTH_SUBJECT");
-      if (devSubject) return devSubject;
+    const isProduction =
+      this.config.get<string>("NODE_ENV") === "production";
+    const devAuthSetting = this.config.get<string>("ALLOW_DEV_AUTH");
+    const devAuthEnabled =
+      devAuthSetting === "true" ||
+      (devAuthSetting === undefined && !isProduction);
+
+    if (devAuthEnabled) {
+      return (
+        this.config.get<string>("DEV_AUTH_SUBJECT") ?? "dev-employee-avery"
+      );
     }
 
     throw new UnauthorizedException("A bearer access token is required.");
