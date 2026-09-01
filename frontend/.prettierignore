@@ -1,0 +1,7 @@
+.next
+AGENTS.md
+CLAUDE.md
+coverage
+node_modules
+package-lock.json
+public

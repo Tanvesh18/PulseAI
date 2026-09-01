@@ -1,0 +1,105 @@
+html {
+  height: 100%;
+  color-scheme: light;
+}
+
+html,
+body {
+  max-width: 100vw;
+}
+
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--color-text-primary);
+  background: var(--color-canvas);
+  caret-color: var(--color-primary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body-md);
+  line-height: var(--line-height-body-md);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+  scrollbar-color: var(--color-border-strong) var(--color-surface-subtle);
+}
+
+a {
+  color: inherit;
+  text-underline-offset: var(--spacing-xxs);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  color: var(--color-text-primary);
+  background: var(--color-primary-border);
+}
+
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.skip-link {
+  position: fixed;
+  inset-block-start: var(--spacing-xs);
+  inset-inline-start: var(--spacing-xs);
+  z-index: 1000;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  color: var(--color-on-primary);
+  background: var(--color-primary);
+  font-size: var(--font-size-label-md);
+  font-weight: var(--font-weight-label-md);
+  line-height: var(--line-height-label-md);
+  transform: translateY(calc(-100% - var(--spacing-md)));
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skip-link {
+    transition: transform var(--motion-duration-fast)
+      var(--motion-easing-standard);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: var(--motion-duration-instant) !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: var(--motion-duration-instant) !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: var(--color-focus-forced);
+  }
+
+  .skip-link {
+    border: var(--border-width-default) solid var(--color-border-forced);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :focus-visible {
+    outline-width: var(--focus-ring-width-strong);
+  }
+}
