@@ -1,3 +1,4 @@
+
 # Pulse AI
 
 Pulse AI is an enterprise workforce-management application for recording, validating, submitting, and reviewing employee timesheets. The long-term product vision connects time capture to manager approvals, payroll preparation, invoicing, notifications, audit trails, and carefully scoped AI assistance.
