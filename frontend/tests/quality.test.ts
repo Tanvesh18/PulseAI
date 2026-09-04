@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseEnvironment } from "@/config/env";
 
 const sourceDirectory = path.join(process.cwd(), "src");
 const tokenPath = path.join(sourceDirectory, "styles", "tokens.css");
@@ -235,5 +236,19 @@ describe("Pulse AI design tokens", () => {
         `--color-focus on ${surfaceToken} should meet 3:1`,
       ).toBeGreaterThanOrEqual(3);
     }
+  });
+});
+
+describe("environment configuration", () => {
+  it("accepts the supported Next.js environments", () => {
+    expect(parseEnvironment({ NODE_ENV: "test" })).toEqual({
+      AUTH_COOKIE_NAME: "pulse_access_token",
+      BACKEND_API_URL: "http://localhost:4000",
+      NODE_ENV: "test",
+    });
+  });
+
+  it("rejects unsupported environments", () => {
+    expect(() => parseEnvironment({ NODE_ENV: "staging" })).toThrow();
   });
 });

@@ -325,6 +325,18 @@
   font-weight: var(--font-weight-body-emphasis);
 }
 
+.notificationItem > a {
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.notificationItem > a:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
 .notificationItem p {
   margin-block-start: var(--spacing-xxs);
   color: var(--color-text-secondary);
@@ -379,6 +391,14 @@
   color: var(--color-text-primary);
   font-size: var(--font-size-body-md);
   line-height: var(--line-height-body-md);
+}
+
+.assistantMessage a {
+  display: inline-block;
+  margin-block-start: var(--spacing-sm);
+  color: var(--color-link);
+  font-size: var(--font-size-body-md);
+  text-underline-offset: 3px;
 }
 
 .suggestionList {

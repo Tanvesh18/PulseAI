@@ -77,6 +77,16 @@ export function TimesheetEditor({
   readOnly?: boolean;
   timesheet: TimesheetPeriod;
 }) {
+  const formatDateTime = (value?: string | null) => {
+    if (!value) return "Not available";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? value
+      : new Intl.DateTimeFormat("en-IN", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(date);
+  };
   const [entries, setEntries] = useState<TimesheetEntry[]>(timesheet.entries);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [status, setStatus] = useState<TimesheetStatus>(timesheet.status);
@@ -113,8 +123,21 @@ export function TimesheetEditor({
     [entries],
   );
   const varianceHours = timesheet.expectedHours - weeklyTotal;
+  const blockingIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (weeklyTotal <= 0)
+      issues.push("Record at least one hour before submitting.");
+    for (const day of timesheet.days) {
+      if (dailyTotals[day.day] > 24) {
+        issues.push(`${day.label} exceeds the 24-hour daily limit.`);
+      }
+    }
+    return issues;
+  }, [dailyTotals, timesheet.days, weeklyTotal]);
   const liveIssues = useMemo<ValidationIssue[]>(() => {
-    const issues: ValidationIssue[] = [];
+    const issues: ValidationIssue[] = timesheet.issues.filter(
+      (issue) => issue.type === "unusual",
+    );
 
     if (weeklyTotal < timesheet.expectedHours) {
       const missing = timesheet.expectedHours - weeklyTotal;
@@ -153,7 +176,13 @@ export function TimesheetEditor({
     }
 
     return issues;
-  }, [entries, timesheet.days, timesheet.expectedHours, weeklyTotal]);
+  }, [
+    entries,
+    timesheet.days,
+    timesheet.expectedHours,
+    timesheet.issues,
+    weeklyTotal,
+  ]);
 
   function updateHours(
     entryId: string,
@@ -161,7 +190,9 @@ export function TimesheetEditor({
     event: ChangeEvent<HTMLInputElement>,
   ) {
     const parsed = Number.parseFloat(event.target.value);
-    const hours = Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
+    const hours = Number.isFinite(parsed)
+      ? Math.min(Math.max(parsed, 0), 24)
+      : 0;
 
     setEntries((currentEntries) => {
       const nextEntries = currentEntries.map((entry) =>
@@ -256,6 +287,7 @@ export function TimesheetEditor({
   }
 
   async function submitTimesheet(): Promise<void> {
+    if (blockingIssues.length) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setIsSubmitting(true);
     setSaveError(null);
@@ -324,7 +356,7 @@ export function TimesheetEditor({
                       </DialogClose>
                       <DialogClose asChild>
                         <Button
-                          disabled={isSubmitting}
+                          disabled={isSubmitting || blockingIssues.length > 0}
                           onClick={() => void submitTimesheet()}
                         >
                           {isSubmitting ? "Submitting…" : "Submit timesheet"}
@@ -350,6 +382,10 @@ export function TimesheetEditor({
                       <div>
                         <dt>Warnings</dt>
                         <dd>{liveIssues.length}</dd>
+                      </div>
+                      <div>
+                        <dt>Blocking issues</dt>
+                        <dd>{blockingIssues.length}</dd>
                       </div>
                     </dl>
                     <Alert
@@ -384,6 +420,25 @@ export function TimesheetEditor({
         >
           {saveError}
         </Alert>
+      ) : null}
+
+      {status === "rejected" && timesheet.rejectionReason ? (
+        <Alert title="Returned for correction" tone="error">
+          {timesheet.rejectionReason}
+        </Alert>
+      ) : null}
+
+      {blockingIssues.length ? (
+        <div
+          className={styles.validationStack}
+          aria-label="Blocking timesheet errors"
+        >
+          {blockingIssues.map((issue) => (
+            <Alert key={issue} title="Submission blocked" tone="error">
+              {issue}
+            </Alert>
+          ))}
+        </div>
       ) : null}
 
       <section className={styles.periodToolbar} aria-label="Timesheet period">
@@ -476,7 +531,7 @@ export function TimesheetEditor({
             <Alert
               key={issue.id}
               title={issue.title}
-              tone="warning"
+              tone={issue.type === "unusual" ? "anomaly" : "warning"}
               action={
                 issue.cellId ? (
                   <Button
@@ -506,7 +561,7 @@ export function TimesheetEditor({
           <dl className={styles.summaryMetrics}>
             <div>
               <dt>Submitted</dt>
-              <dd>{timesheet.submittedAt ?? "Not available"}</dd>
+              <dd>{formatDateTime(timesheet.submittedAt)}</dd>
             </div>
             <div>
               <dt>{status === "approved" ? "Approved by" : "Reviewed by"}</dt>
@@ -516,7 +571,7 @@ export function TimesheetEditor({
               <dt>Decision</dt>
               <dd>
                 {status === "approved"
-                  ? (timesheet.approvedAt ?? "Approved")
+                  ? formatDateTime(timesheet.approvedAt)
                   : status === "rejected"
                     ? "Returned for correction"
                     : "Awaiting review"}
@@ -590,6 +645,7 @@ export function TimesheetEditor({
                               flagged ? "duplicate-entry-note" : undefined
                             }
                             inputMode="decimal"
+                            max="24"
                             min="0"
                             readOnly={isLocked}
                             step="0.25"
@@ -663,6 +719,7 @@ export function TimesheetEditor({
                             flagged ? "duplicate-entry-note" : undefined
                           }
                           inputMode="decimal"
+                          max="24"
                           min="0"
                           readOnly={isLocked}
                           step="0.25"
@@ -719,7 +776,7 @@ export function TimesheetEditor({
                   </DialogClose>
                   <DialogClose asChild>
                     <Button
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || blockingIssues.length > 0}
                       onClick={() => void submitTimesheet()}
                     >
                       {isSubmitting ? "Submitting…" : "Submit timesheet"}
@@ -735,6 +792,31 @@ export function TimesheetEditor({
             </DialogContent>
           </Dialog>
         </div>
+      ) : null}
+
+      {timesheet.revisions?.length ? (
+        <section
+          className={styles.sectionBlock}
+          aria-labelledby="revision-history-title"
+        >
+          <div className={styles.sectionHeader}>
+            <h2 id="revision-history-title">Revision history</h2>
+          </div>
+          <ol className={styles.revisionTimeline}>
+            {timesheet.revisions.toReversed().map((revision) => (
+              <li key={`${revision.version}-${revision.createdAt}`}>
+                <strong>Version {revision.version}</strong>
+                <span>
+                  {revision.status} ·{" "}
+                  {new Intl.DateTimeFormat("en-IN", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  }).format(new Date(revision.createdAt))}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
       ) : null}
     </div>
   );

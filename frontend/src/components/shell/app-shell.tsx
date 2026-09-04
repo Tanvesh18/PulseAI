@@ -15,12 +15,23 @@ import {
   Menu,
   Send,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   assistantPreview,
   employeeNotifications,
   employeeProfile,
 } from "@/features/employee/data/mock-employee";
+import {
+  askAssistant,
+  getEmployeeProfile,
+  listNotifications,
+  markNotificationRead,
+} from "@/features/employee/data/employee-api";
+import type {
+  AssistantAnswer,
+  EmployeeNotification,
+  EmployeeProfile,
+} from "@/features/employee/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
@@ -100,16 +111,20 @@ function ProductIdentity() {
   );
 }
 
-function ProfileSummary() {
+function ProfileSummary({
+  profile = employeeProfile,
+}: {
+  profile?: EmployeeProfile;
+}) {
   return (
     <div className={styles.profileSummary}>
       <span className={styles.avatar} aria-hidden="true">
-        {employeeProfile.initials}
+        {profile.initials}
       </span>
       <span className={styles.profileCopy}>
-        <strong>{employeeProfile.name}</strong>
+        <strong>{profile.name}</strong>
         <span>
-          {employeeProfile.role} · {employeeProfile.organization}
+          {profile.role} · {profile.organization}
         </span>
       </span>
     </div>
@@ -117,9 +132,33 @@ function ProfileSummary() {
 }
 
 function NotificationDrawer() {
-  const unreadCount = employeeNotifications.filter(
+  const [notifications, setNotifications] = useState<EmployeeNotification[]>(
+    employeeNotifications,
+  );
+  const unreadCount = notifications.filter(
     (notification) => !notification.read,
   ).length;
+
+  useEffect(() => {
+    let active = true;
+    listNotifications()
+      .then((result) => {
+        if (active) setNotifications(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function readNotification(notificationId: string) {
+    setNotifications((current) =>
+      current.map((item) =>
+        item.id === notificationId ? { ...item, read: true } : item,
+      ),
+    );
+    void markNotificationRead(notificationId).catch(() => undefined);
+  }
 
   return (
     <Dialog>
@@ -142,7 +181,7 @@ function NotificationDrawer() {
         <div className={styles.notificationGroup}>
           <h3>Recent</h3>
           <ul className={styles.notificationList}>
-            {employeeNotifications.map((notification) => (
+            {notifications.map((notification) => (
               <li
                 className={`${styles.notificationItem} ${notification.read ? "" : styles.notificationUnread}`}
                 key={notification.id}
@@ -150,11 +189,19 @@ function NotificationDrawer() {
                 <span className={styles.notificationIcon} aria-hidden="true">
                   <Clock3 size={18} />
                 </span>
-                <div>
+                <Link
+                  href={notification.href as Route}
+                  onClick={() => readNotification(notification.id)}
+                >
                   <strong>{notification.title}</strong>
                   <p>{notification.message}</p>
-                  <time>{notification.when}</time>
-                </div>
+                  <time dateTime={notification.createdAt}>
+                    {new Intl.DateTimeFormat("en-IN", {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(notification.createdAt))}
+                  </time>
+                </Link>
               </li>
             ))}
           </ul>
@@ -165,9 +212,33 @@ function NotificationDrawer() {
 }
 
 function AssistantDrawer() {
-  const [response, setResponse] = useState<string>(
-    assistantPreview.responses["Summarize my current timesheet"],
-  );
+  const [response, setResponse] = useState<AssistantAnswer | null>(null);
+  const [question, setQuestion] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runQuery(nextQuestion: string) {
+    if (!nextQuestion.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setResponse(await askAssistant(nextQuestion));
+      setQuestion("");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The assistant is unavailable.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    void runQuery(question);
+  }
 
   return (
     <Dialog>
@@ -184,7 +255,7 @@ function AssistantDrawer() {
       </Tooltip>
       <DialogContent
         title="Pulse AI Assistant"
-        description="Read-only · Employee scope · Demo data"
+        description="Read-only · Employee scope · Live timesheet data"
         side="right"
       >
         <div className={styles.assistantPanel}>
@@ -195,7 +266,15 @@ function AssistantDrawer() {
 
           <div className={styles.assistantMessage} aria-live="polite">
             <span className={styles.assistantMessageLabel}>AI response</span>
-            <p>{response}</p>
+            <p>
+              {response?.answer ??
+                "Ask for a summary, the current status, or the hours remaining in your timesheet."}
+            </p>
+            {response?.sources.map((source) => (
+              <Link key={source.href} href={source.href as Route}>
+                View source: {source.label}
+              </Link>
+            ))}
           </div>
 
           <div className={styles.suggestionGroup}>
@@ -205,9 +284,8 @@ function AssistantDrawer() {
                 <button
                   key={suggestion}
                   type="button"
-                  onClick={() =>
-                    setResponse(assistantPreview.responses[suggestion])
-                  }
+                  onClick={() => void runQuery(suggestion)}
+                  disabled={loading}
                 >
                   {suggestion}
                   <ChevronRight aria-hidden="true" size={16} />
@@ -216,23 +294,27 @@ function AssistantDrawer() {
             </div>
           </div>
 
-          <form
-            className={styles.assistantComposer}
-            onSubmit={(event) => event.preventDefault()}
-          >
+          <form className={styles.assistantComposer} onSubmit={submit}>
             <label htmlFor="assistant-message">Ask about your timesheets</label>
             <div>
               <input
                 id="assistant-message"
-                placeholder="Use a suggested question in this demo"
-                disabled
+                placeholder="Ask about your current timesheet"
+                value={question}
+                maxLength={300}
+                onChange={(event) => setQuestion(event.target.value)}
               />
-              <Button size="icon" disabled aria-label="Send message">
+              <Button
+                size="icon"
+                disabled={loading || question.trim().length < 2}
+                aria-label="Send message"
+              >
                 <Send aria-hidden="true" size={18} />
               </Button>
             </div>
             <p>
-              The assistant is read-only and cannot submit or approve records.
+              {error ??
+                "The assistant is read-only and cannot submit or approve records."}
             </p>
           </form>
         </div>
@@ -275,13 +357,26 @@ function MobileNavigation() {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const currentPage = pageNames[pathname] ?? "Timesheet detail";
+  const [profile, setProfile] = useState<EmployeeProfile>(employeeProfile);
+
+  useEffect(() => {
+    let active = true;
+    getEmployeeProfile()
+      .then((result) => {
+        if (active) setProfile(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
         <ProductIdentity />
         <EmployeeNavigation />
-        <ProfileSummary />
+        <ProfileSummary profile={profile} />
       </aside>
 
       <div className={styles.workspace}>
@@ -306,7 +401,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <AssistantDrawer />
             <NotificationDrawer />
             <div className={styles.headerProfile}>
-              <ProfileSummary />
+              <ProfileSummary profile={profile} />
             </div>
           </div>
         </header>

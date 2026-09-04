@@ -1,4 +1,11 @@
-import type { TimesheetEntry, TimesheetPeriod } from "../types";
+import type {
+  AssistantAnswer,
+  EmployeeAuditEvent,
+  EmployeeNotification,
+  EmployeeProfile,
+  TimesheetEntry,
+  TimesheetPeriod,
+} from "../types";
 
 export class EmployeeApiError extends Error {
   constructor(
@@ -7,6 +14,14 @@ export class EmployeeApiError extends Error {
   ) {
     super(message);
   }
+}
+
+export function isEmployeeAccessError(
+  reason: unknown,
+): reason is EmployeeApiError {
+  return (
+    reason instanceof EmployeeApiError && [401, 403].includes(reason.status)
+  );
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -27,7 +42,60 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getCurrentTimesheet(): Promise<TimesheetPeriod> {
-  return request<TimesheetPeriod>("/timesheets/current");
+  return request<TimesheetPeriod>("/timesheets/current").then(
+    normalizeTimesheet,
+  );
+}
+
+export function getEmployeeProfile(): Promise<EmployeeProfile> {
+  return request<EmployeeProfile>("/me");
+}
+
+export function listTimesheets(): Promise<TimesheetPeriod[]> {
+  return request<TimesheetPeriod[]>("/timesheets").then((items) =>
+    items.map(normalizeTimesheet),
+  );
+}
+
+export function getTimesheet(timesheetId: string): Promise<TimesheetPeriod> {
+  return request<TimesheetPeriod>(`/timesheets/${timesheetId}`).then(
+    normalizeTimesheet,
+  );
+}
+
+function normalizeTimesheet(timesheet: TimesheetPeriod): TimesheetPeriod {
+  const approvedBy = timesheet.approvedBy ?? timesheet.reviewerName;
+  return {
+    ...timesheet,
+    ...(approvedBy ? { approvedBy } : {}),
+  };
+}
+
+export function listNotifications(): Promise<EmployeeNotification[]> {
+  return request<EmployeeNotification[]>("/notifications");
+}
+
+export function markNotificationRead(
+  notificationId: string,
+): Promise<EmployeeNotification> {
+  return request<EmployeeNotification>(
+    `/notifications/${notificationId}/read`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export function listAuditEvents(): Promise<EmployeeAuditEvent[]> {
+  return request<EmployeeAuditEvent[]>("/audit-events");
+}
+
+export function askAssistant(question: string): Promise<AssistantAnswer> {
+  return request<AssistantAnswer>("/assistant/query", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
 }
 
 function updatePayload(
@@ -55,7 +123,7 @@ export function saveTimesheet(
   return request<TimesheetPeriod>(`/timesheets/${timesheet.id}`, {
     method: "PATCH",
     body: JSON.stringify(updatePayload(timesheet, entries, expectedVersion)),
-  });
+  }).then(normalizeTimesheet);
 }
 
 export async function submitTimesheet(
@@ -67,5 +135,5 @@ export async function submitTimesheet(
   return request<TimesheetPeriod>(`/timesheets/${timesheet.id}/submit`, {
     method: "POST",
     body: JSON.stringify({ expectedVersion: saved.version }),
-  });
+  }).then(normalizeTimesheet);
 }

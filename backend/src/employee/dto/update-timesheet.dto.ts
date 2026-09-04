@@ -1,6 +1,7 @@
 import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsDateString,
   IsInt,
@@ -26,6 +27,7 @@ export class AssignmentHoursDto {
   assignmentId!: string;
 
   @IsArray()
+  @ArrayMinSize(1)
   @ArrayMaxSize(7)
   @ValidateNested({ each: true })
   @Type(() => WorkDayDto)
@@ -38,6 +40,7 @@ export class UpdateTimesheetDto {
   expectedVersion!: number;
 
   @IsArray()
+  @ArrayMinSize(1)
   @ArrayMaxSize(100)
   @ValidateNested({ each: true })
   @Type(() => AssignmentHoursDto)

@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   getCurrentTimesheet,
+  isEmployeeAccessError,
   saveTimesheet,
   submitTimesheet,
 } from "../data/employee-api";
@@ -25,9 +26,14 @@ export function CurrentTimesheetScreen() {
     try {
       setTimesheet(await getCurrentTimesheet());
       setUsingStaticData(false);
-    } catch {
-      setTimesheet(structuredClone(staticCurrentTimesheet));
-      setUsingStaticData(true);
+    } catch (reason) {
+      if (isEmployeeAccessError(reason)) {
+        setTimesheet(null);
+        setError(reason.message);
+      } else {
+        setTimesheet(structuredClone(staticCurrentTimesheet));
+        setUsingStaticData(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -42,10 +48,19 @@ export function CurrentTimesheetScreen() {
           setUsingStaticData(false);
         }
       })
-      .catch(() => {
+      .catch((reason: unknown) => {
         if (!active) return;
-        setTimesheet(structuredClone(staticCurrentTimesheet));
-        setUsingStaticData(true);
+        if (isEmployeeAccessError(reason)) {
+          setTimesheet(null);
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Employee access is required.",
+          );
+        } else {
+          setTimesheet(structuredClone(staticCurrentTimesheet));
+          setUsingStaticData(true);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);

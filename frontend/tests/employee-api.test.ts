@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { currentTimesheet } from "./mock-employee";
-import { saveTimesheet } from "./employee-api";
+import { currentTimesheet } from "@/features/employee/data/mock-employee";
+import {
+  askAssistant,
+  markNotificationRead,
+  saveTimesheet,
+} from "@/features/employee/data/employee-api";
 
 describe("employee API", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -41,5 +45,25 @@ describe("employee API", () => {
         status: 409,
       }),
     );
+  });
+
+  it("uses employee-scoped notification and assistant endpoints", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ read: true })));
+
+    await markNotificationRead("notification-1");
+    await askAssistant("Summarize my current timesheet");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/backend/employee/notifications/notification-1/read",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "PATCH" });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/backend/employee/assistant/query",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      question: "Summarize my current timesheet",
+    });
   });
 });

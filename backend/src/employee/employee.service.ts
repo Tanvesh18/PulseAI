@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import type { RequestActor } from "../auth/request-actor";
 import {
   StaticDataService,
@@ -106,6 +107,7 @@ export class EmployeeService {
       }
     }
 
+    this.recordRevision(timesheet);
     timesheet.entries = dto.entries.map((entry) => {
       const assignment = allowed.get(entry.assignmentId)!;
       return {
@@ -119,6 +121,16 @@ export class EmployeeService {
       };
     });
     timesheet.version += 1;
+    this.refreshTimesheetReminder(actor, timesheet);
+    this.data.auditEvents.unshift({
+      action: "TIMESHEET_UPDATED",
+      actorUserId: actor.userId,
+      createdAt: new Date().toISOString(),
+      id: randomUUID(),
+      summary: `Updated ${this.periodLabel(timesheet.periodStart, timesheet.periodEnd)} timesheet entries.`,
+      targetId: timesheet.id,
+    });
+    this.data.persist();
     return this.toTimesheetResponse(timesheet, actor);
   }
 
@@ -134,8 +146,23 @@ export class EmployeeService {
         "This timesheet changed in another session. Refresh before submitting.",
       );
     }
-    timesheet.status =
-      timesheet.status === "REJECTED" ? "RESUBMITTED" : "SUBMITTED";
+    const total = timesheet.entries.reduce(
+      (sum, entry) =>
+        sum +
+        Object.values(entry.hours).reduce(
+          (entrySum, hours) => entrySum + hours,
+          0,
+        ),
+      0,
+    );
+    if (total <= 0) {
+      throw new BadRequestException(
+        "Record at least one hour before submitting this timesheet.",
+      );
+    }
+    this.recordRevision(timesheet);
+    const wasRejected = timesheet.status === "REJECTED";
+    timesheet.status = wasRejected ? "RESUBMITTED" : "SUBMITTED";
     timesheet.submittedAt = new Date().toISOString();
     timesheet.version += 1;
     this.data.notifications.unshift({
@@ -148,13 +175,101 @@ export class EmployeeService {
       read: false,
       createdAt: new Date().toISOString(),
     });
+    this.data.auditEvents.unshift({
+      action: wasRejected ? "TIMESHEET_RESUBMITTED" : "TIMESHEET_SUBMITTED",
+      actorUserId: actor.userId,
+      createdAt: new Date().toISOString(),
+      id: randomUUID(),
+      summary: `${wasRejected ? "Resubmitted" : "Submitted"} ${this.periodLabel(timesheet.periodStart, timesheet.periodEnd)} for review.`,
+      targetId: timesheet.id,
+    });
+    this.data.persist();
     return this.toTimesheetResponse(timesheet, actor);
   }
 
   listNotifications(actor: RequestActor) {
+    const current = this.employeeTimesheets(actor).find((item) =>
+      ["DRAFT", "REJECTED"].includes(item.status),
+    );
+    if (current) this.refreshTimesheetReminder(actor, current);
     return structuredClone(
       this.data.notifications.filter((item) => item.userId === actor.userId),
     );
+  }
+
+  markNotificationRead(actor: RequestActor, notificationId: string) {
+    const notification = this.data.notifications.find(
+      (item) => item.id === notificationId && item.userId === actor.userId,
+    );
+    if (!notification) throw new NotFoundException("Notification not found.");
+    notification.read = true;
+    this.data.auditEvents.unshift({
+      action: "NOTIFICATION_READ",
+      actorUserId: actor.userId,
+      createdAt: new Date().toISOString(),
+      id: randomUUID(),
+      summary: `Marked notification “${notification.title}” as read.`,
+      targetId: notification.id,
+    });
+    this.data.persist();
+    return structuredClone(notification);
+  }
+
+  getAuditEvents(actor: RequestActor) {
+    return structuredClone(
+      this.data.auditEvents.filter(
+        (event) => event.actorUserId === actor.userId,
+      ),
+    );
+  }
+
+  askAssistant(actor: RequestActor, question: string) {
+    const normalized = question.trim().toLowerCase();
+    const current = this.getCurrentTimesheet(actor);
+    const total = current.entries.reduce(
+      (sum, entry) =>
+        sum +
+        Object.values(entry.hours).reduce(
+          (entrySum, hours) => entrySum + hours,
+          0,
+        ),
+      0,
+    );
+    let answer: string;
+
+    if (normalized.includes("missing") || normalized.includes("remain")) {
+      const remaining = Math.max(current.expectedHours - total, 0);
+      answer = remaining
+        ? `${remaining} hours remain before the ${current.expectedHours}-hour expectation for ${current.label}.`
+        : `${current.label} meets the ${current.expectedHours}-hour expectation.`;
+    } else if (
+      normalized.includes("status") ||
+      normalized.includes("submitted")
+    ) {
+      answer = `The current timesheet for ${current.label} is ${current.status}.`;
+    } else if (
+      normalized.includes("summary") ||
+      normalized.includes("summarize") ||
+      normalized.includes("hours")
+    ) {
+      answer = `${current.label} contains ${total} recorded hours across ${current.entries.length} assignments, with ${current.expectedHours} hours expected.`;
+    } else {
+      answer =
+        "I can summarize your current timesheet, report its status, or explain how many hours remain. I cannot access another employee’s records or take workflow actions.";
+    }
+
+    return {
+      answer,
+      generatedAt: new Date().toISOString(),
+      readOnly: true,
+      scope: "Employee · Own timesheets",
+      sources: [
+        {
+          href: "/employee/timesheets/current",
+          label: current.label,
+        },
+      ],
+    };
   }
 
   private ownedTimesheet(actor: RequestActor, timesheetId: string) {
@@ -172,10 +287,7 @@ export class EmployeeService {
       .sort((a, b) => b.periodStart.localeCompare(a.periodStart));
   }
 
-  private toTimesheetResponse(
-    timesheet: StaticTimesheet,
-    actor: RequestActor,
-  ) {
+  private toTimesheetResponse(timesheet: StaticTimesheet, actor: RequestActor) {
     const periods = this.employeeTimesheets(actor).toReversed();
     const position = periods.findIndex((item) => item.id === timesheet.id);
     const dates = this.periodDates(timesheet.periodStart, timesheet.periodEnd);
@@ -212,8 +324,8 @@ export class EmployeeService {
           timeZone: "UTC",
         }).format(date),
       })),
-      issues:
-        total < timesheet.expectedHours
+      issues: [
+        ...(total < timesheet.expectedHours
           ? [
               {
                 id: "missing-hours",
@@ -222,7 +334,25 @@ export class EmployeeService {
                 message: `The current total is ${total} hours against ${timesheet.expectedHours} expected hours. Review the week before submitting.`,
               },
             ]
-          : [],
+          : []),
+        ...dates
+          .map((date) => {
+            const day = this.dayKey(date);
+            const dayTotal = timesheet.entries.reduce(
+              (sum, entry) => sum + (entry.hours[day] ?? 0),
+              0,
+            );
+            return dayTotal > 12
+              ? {
+                  id: `unusual-${date.toISOString().slice(0, 10)}`,
+                  type: "unusual" as const,
+                  title: `Unusual total on ${this.dayKey(date).toUpperCase()}`,
+                  message: `${dayTotal} hours is above the 12-hour review threshold. This statistical flag does not change approval automatically.`,
+                }
+              : null;
+          })
+          .filter((issue) => issue !== null),
+      ],
     };
   }
 
@@ -232,6 +362,61 @@ export class EmployeeService {
         "Only draft or rejected timesheets can be edited.",
       );
     }
+  }
+
+  private recordRevision(timesheet: StaticTimesheet): void {
+    timesheet.revisions.push({
+      createdAt: new Date().toISOString(),
+      entries: structuredClone(timesheet.entries),
+      status: timesheet.status,
+      version: timesheet.version,
+    });
+  }
+
+  private refreshTimesheetReminder(
+    actor: RequestActor,
+    timesheet: StaticTimesheet,
+  ): void {
+    const total = timesheet.entries.reduce(
+      (sum, entry) =>
+        sum +
+        Object.values(entry.hours).reduce(
+          (entrySum, hours) => entrySum + hours,
+          0,
+        ),
+      0,
+    );
+    const remaining = Math.max(timesheet.expectedHours - total, 0);
+    const id = `notification-reminder-${timesheet.id}`;
+    const existing = this.data.notifications.find((item) => item.id === id);
+    if (remaining === 0) {
+      if (existing && !existing.read) {
+        existing.read = true;
+        this.data.persist();
+      }
+      return;
+    }
+    const message = `${remaining} ${remaining === 1 ? "hour remains" : "hours remain"} unrecorded in ${this.periodLabel(timesheet.periodStart, timesheet.periodEnd)}.`;
+    if (existing) {
+      if (existing.message !== message) {
+        existing.message = message;
+        existing.createdAt = new Date().toISOString();
+        existing.read = false;
+        this.data.persist();
+      }
+      return;
+    }
+    this.data.notifications.unshift({
+      category: "reminder",
+      createdAt: new Date().toISOString(),
+      href: "/employee/timesheets/current",
+      id,
+      message,
+      read: false,
+      title: "Timesheet needs review",
+      userId: actor.userId,
+    });
+    this.data.persist();
   }
 
   private employeeId(actor: RequestActor): string {

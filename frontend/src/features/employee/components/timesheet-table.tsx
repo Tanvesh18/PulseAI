@@ -15,6 +15,16 @@ export function TimesheetTable({
   compact?: boolean;
   timesheets: TimesheetPeriod[];
 }) {
+  const formatDateTime = (value?: string | null) => {
+    if (!value) return "Not submitted";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? value
+      : new Intl.DateTimeFormat("en-IN", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(date);
+  };
   return (
     <div className={styles.tableFrame}>
       <table className={styles.dataTable}>
@@ -49,7 +59,7 @@ export function TimesheetTable({
               </td>
               {!compact ? (
                 <td className={styles.metadataCell}>
-                  {timesheet.submittedAt ?? "Not submitted"}
+                  {formatDateTime(timesheet.submittedAt)}
                 </td>
               ) : null}
               {!compact ? (
@@ -57,7 +67,7 @@ export function TimesheetTable({
                   {timesheet.status === "approved" ? (
                     <>
                       <span>{timesheet.approvedBy}</span>
-                      <small>{timesheet.approvedAt}</small>
+                      <small>{formatDateTime(timesheet.approvedAt)}</small>
                     </>
                   ) : timesheet.status === "rejected" ? (
                     <>

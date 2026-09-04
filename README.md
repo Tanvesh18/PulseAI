@@ -3,7 +3,7 @@
 
 Pulse AI is an enterprise workforce-management application for recording, validating, submitting, and reviewing employee timesheets. The long-term product vision connects time capture to manager approvals, payroll preparation, invoicing, notifications, audit trails, and carefully scoped AI assistance.
 
-This repository currently contains the first end-to-end **Employee timesheet vertical slice**: a responsive Next.js frontend communicates with a NestJS API to load, edit, save, and submit a weekly timesheet. The project is still an early implementation and uses seeded in-memory backend data rather than a database.
+This repository currently contains an end-to-end **Employee timesheet vertical slice**: a responsive Next.js frontend communicates with a NestJS API to load, edit, save, submit, and review weekly timesheets. Local development state is seeded and durably written to a JSON data file; a production SQL database remains planned.
 
 ## Table of contents
 
@@ -32,15 +32,15 @@ Pulse AI is a functional prototype, not a production-ready workforce system.
 | Area                                                   | Status                                         |
 | ------------------------------------------------------ | ---------------------------------------------- |
 | Employee application shell and responsive navigation   | Implemented                                    |
-| Employee overview and timesheet history                | Implemented with frontend demo data            |
+| Employee overview and timesheet history                | Connected end to end with offline demo fallback |
 | Current weekly timesheet editor                        | Connected end to end                           |
 | Save and submit operations                             | Implemented through the NestJS API             |
 | Input validation and optimistic concurrency            | Implemented                                    |
 | Development authentication and OIDC token verification | Implemented                                    |
-| Persistent database storage                            | Not yet implemented; backend data is in memory |
+| Persistent storage                                     | Local atomic JSON persistence implemented; SQL planned |
 | Manager, HR, Finance, and Director workspaces          | Planned                                        |
 | Approval, payroll, invoice, and audit workflows        | Planned                                        |
-| Anomaly detection and LLM assistant                    | Planned                                        |
+| Anomaly detection and LLM assistant                    | Deterministic unusual-hours checks and scoped read-only query API implemented; external LLM planned |
 
 ## Features
 
@@ -81,7 +81,7 @@ The current Employee experience includes:
 - `jose` for OIDC/JWT verification through a remote JWKS
 - Helmet for security headers
 - Jest for unit tests
-- Seeded in-memory data for the current prototype
+- Seeded local data with atomic JSON-file persistence for development
 
 ### Planned platform components
 
@@ -96,7 +96,7 @@ flowchart LR
     P -->|/api/v1/*| A[NestJS API<br/>localhost:4000]
     A --> G[Employee auth guard]
     G --> S[Employee service]
-    S --> D[Seeded in-memory data]
+    S --> D[Seeded persistent local data]
     G -. production bearer token .-> I[OIDC issuer / JWKS]
 ```
 
@@ -111,7 +111,7 @@ PulseAI_Emerson/
 |-- backend/                 # NestJS API
 |   |-- src/
 |   |   |-- auth/            # Employee guard and request actor
-|   |   |-- data/            # Seeded in-memory prototype data
+|   |   |-- data/            # Seeded local persistence boundary
 |   |   |-- employee/        # Employee endpoints, service, and DTOs
 |   |   |-- app.module.ts
 |   |   `-- main.ts
@@ -236,10 +236,10 @@ The frontend reads `frontend/.env.local` and validates server-side values with Z
 | Route                             | Data source                   | Description                                           |
 | --------------------------------- | ----------------------------- | ----------------------------------------------------- |
 | `/`                               | —                             | Redirects to `/employee`                              |
-| `/employee`                       | Frontend demo data            | Employee overview, alerts, totals, and recent periods |
+| `/employee`                       | NestJS API with demo fallback | Employee overview, alerts, totals, and recent periods |
 | `/employee/timesheets/current`    | NestJS API with demo fallback | Editable current weekly timesheet                     |
-| `/employee/timesheets/history`    | Frontend demo data            | Timesheet-history table and summary                   |
-| `/employee/timesheets/[periodId]` | Frontend demo data            | Read-only historical timesheet detail                 |
+| `/employee/timesheets/history`    | NestJS API with demo fallback | Timesheet-history table and summary                   |
+| `/employee/timesheets/[periodId]` | NestJS API with demo fallback | Historical detail and rejected-period correction      |
 | `/api/backend/[...path]`          | Next.js proxy                 | Same-origin bridge to the NestJS API                  |
 
 ## API reference
@@ -255,6 +255,9 @@ All backend endpoints use the `/api/v1/employee` prefix and are protected by the
 | `PATCH` | `/api/v1/employee/timesheets/:timesheetId`        | Replace assignment/day entries for an editable timesheet |
 | `POST`  | `/api/v1/employee/timesheets/:timesheetId/submit` | Submit a draft or resubmit a rejected timesheet          |
 | `GET`   | `/api/v1/employee/notifications`                  | List notifications belonging to the employee user        |
+| `PATCH` | `/api/v1/employee/notifications/:notificationId/read` | Mark an employee-owned notification as read            |
+| `GET`   | `/api/v1/employee/audit-events`                   | List the employee's own workflow audit events             |
+| `POST`  | `/api/v1/employee/assistant/query`                | Run a supported read-only query over the employee's scope  |
 
 With the backend running under default development authentication, a profile request can be tested directly:
 
@@ -350,15 +353,14 @@ The repository-level `design.md` is the design authority. `frontend/src/styles/t
 
 ## Known limitations
 
-- Backend changes are held in process memory and disappear on restart.
+- Development persistence uses a local JSON file, not a production SQL database or transactional repository.
 - Only one seeded Employee identity and a small set of assignments, notifications, and timesheets are available.
-- The overview and history pages do not yet consume backend endpoints.
 - There is no frontend sign-in or token-acquisition flow.
 - Manager approval and rejection endpoints are not implemented.
 - HR, Finance, and Director roles are not implemented.
 - There is no PostgreSQL schema, migration system, background worker, email delivery, payroll export, invoice generation, or audit-event store.
-- Anomaly warnings in demo screens are illustrative; no statistical model is running.
-- No LLM or generative-AI service is connected.
+- Unusual-hours findings use a transparent deterministic threshold; no trained statistical model is running.
+- The assistant supports a small permission-scoped read-only query set; no external LLM or generative-AI service is connected.
 - The prototype should not be used for real employee, payroll, compensation, or customer data.
 
 ## Planned direction
@@ -367,22 +369,22 @@ The documented product direction is to expand from the Employee slice into a com
 
 1. Add PostgreSQL persistence, migrations, seed tooling, and transactional repositories.
 2. Complete authentication and backend-enforced role, organization, resource, action, and field-level authorization.
-3. Connect all Employee pages to the API.
-4. Add manager review queues, rejection reasons, resubmission, approval, locking, and reopen controls.
+3. Add scheduled reminders, background delivery, retries, and user notification preferences.
+4. Add manager review queues, rejection decisions, approval, locking, and reopen controls.
 5. Add HR workforce administration and compliance monitoring.
 6. Add Finance-controlled payroll-ready exports and invoice preparation.
-7. Add durable notifications, scheduled reminders, background jobs, and audit events.
-8. Add deterministic policy checks before statistical anomaly detection.
-9. Add a read-only, permission-aware assistant only where it provides explainable value.
+7. Add role-appropriate audit search and retention controls.
+8. Calibrate statistical anomaly detection against approved Emerson policy and historical baselines.
+9. Connect an approved enterprise LLM under the existing read-only, permission-aware assistant boundary.
 
 AI is intended to supplement deterministic controls. It must not approve timesheets, calculate payroll, bypass authorization, or execute arbitrary database queries.
 
 ## Project documentation
 
-- [`PRODUCT.md`](PRODUCT.md) defines the product purpose, users, scope, principles, and constraints.
 - [`design.md`](design.md) defines the authoritative visual and interaction system.
-- [`Plan.md`](Plan.md) contains the planning directive and requested roadmap structure.
-- [`Employee Timesheet and Workforce Management System.docx`](Employee%20Timesheet%20and%20Workforce%20Management%20System.docx) is the source requirements document.
+- [`SRS.docx`](SRS.docx) contains the source software requirements.
+- [`Pulse_AI_PRD_v1.docx`](Pulse_AI_PRD_v1.docx) defines the product requirements baseline.
+- [`Pulse_AI_FSD_v1.docx`](Pulse_AI_FSD_v1.docx) defines the functional behavior baseline.
 - [`FF_180_PulseAI_Completed_with_Architecture.pdf`](FF_180_PulseAI_Completed_with_Architecture.pdf) contains the project synopsis and preliminary architecture.
 
 ## Contributing

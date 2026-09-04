@@ -15,6 +15,16 @@ async function proxy(
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  if (!headers.has("authorization")) {
+    const cookie = request.headers
+      .get("cookie")
+      ?.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${env.AUTH_COOKIE_NAME}=`));
+    const token = cookie?.slice(env.AUTH_COOKIE_NAME.length + 1);
+    if (token)
+      headers.set("authorization", `Bearer ${decodeURIComponent(token)}`);
+  }
 
   try {
     const response = await fetch(target, {

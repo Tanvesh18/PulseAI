@@ -30,7 +30,7 @@ export type ValidationIssue = {
   id: string;
   message: string;
   title: string;
-  type: "missing" | "duplicate";
+  type: "missing" | "duplicate" | "unusual";
 };
 
 export type TimesheetPeriod = {
@@ -48,6 +48,11 @@ export type TimesheetPeriod = {
   previousPeriodId?: string | null;
   rejectedAt?: string | null;
   rejectionReason?: string | null;
+  revisions?: Array<{
+    createdAt: string;
+    status: TimesheetStatus;
+    version: number;
+  }>;
   reviewerName?: string | null;
   status: TimesheetStatus;
   submittedAt?: string | null;
@@ -55,16 +60,39 @@ export type TimesheetPeriod = {
 };
 
 export type EmployeeProfile = {
+  email?: string;
+  employeeNumber?: string;
+  expectedWeeklyHours?: number;
+  id?: string;
   initials: string;
   name: string;
   organization: string;
   role: "Employee";
+  timezone?: string;
 };
 
 export type EmployeeNotification = {
+  category: string;
+  createdAt: string;
+  href: string;
   id: string;
   message: string;
   read: boolean;
   title: string;
-  when: string;
+};
+
+export type AssistantAnswer = {
+  answer: string;
+  generatedAt: string;
+  readOnly: true;
+  scope: string;
+  sources: Array<{ href: string; label: string }>;
+};
+
+export type EmployeeAuditEvent = {
+  action: string;
+  createdAt: string;
+  id: string;
+  summary: string;
+  targetId: string;
 };

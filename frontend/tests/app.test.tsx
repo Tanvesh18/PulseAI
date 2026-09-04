@@ -1,13 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+import { redirect } from "next/navigation";
 import { describe, expect, it, vi } from "vitest";
-import { AppShell } from "./app-shell";
+import Home from "@/app/page";
+import { AppShell } from "@/components/shell/app-shell";
 
 vi.mock("next/navigation", () => ({
+  redirect: vi.fn(),
   usePathname: () => "/employee",
 }));
 
-describe("application shell", () => {
+describe("application entry points", () => {
+  it("redirects the root route to the employee experience", () => {
+    Home();
+
+    expect(redirect).toHaveBeenCalledWith("/employee");
+  });
+
   it("provides labelled employee navigation and utility controls", async () => {
     const { container } = render(
       <AppShell>

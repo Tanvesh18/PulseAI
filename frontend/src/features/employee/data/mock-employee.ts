@@ -176,24 +176,30 @@ export const timesheetHistory: TimesheetPeriod[] = [
 
 export const employeeNotifications: EmployeeNotification[] = [
   {
+    category: "reminder",
+    createdAt: "2026-08-30T04:00:00.000Z",
+    href: "/employee/timesheets/current",
     id: "notification-hours",
     title: "Timesheet needs review",
     message: "One hour remains unrecorded in the current period.",
-    when: "Today · 9:30 AM",
     read: false,
   },
   {
+    category: "approval",
+    createdAt: "2026-08-25T10:00:00.000Z",
+    href: "/employee/timesheets/2026-08-17",
     id: "notification-approved",
     title: "Timesheet approved",
     message: "Morgan Lee approved Aug 17–23, 2026.",
-    when: "Aug 25 · 2:40 PM",
     read: false,
   },
   {
+    category: "timesheet",
+    createdAt: "2026-08-24T03:42:00.000Z",
+    href: "/employee/timesheets/2026-08-17",
     id: "notification-submitted",
     title: "Submission recorded",
     message: "Your Aug 17–23 timesheet was sent for review.",
-    when: "Aug 24 · 9:12 AM",
     read: true,
   },
 ];

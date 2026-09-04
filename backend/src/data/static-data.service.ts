@@ -1,4 +1,7 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 export type UserRole = "EMPLOYEE" | "MANAGER";
 export type TimesheetStatus =
@@ -28,7 +31,7 @@ type StaticAssignment = {
   task: string;
 };
 
-type StaticNotification = {
+export type StaticNotification = {
   category: string;
   createdAt: string;
   href: string;
@@ -37,6 +40,22 @@ type StaticNotification = {
   read: boolean;
   title: string;
   userId: string;
+};
+
+export type StaticAuditEvent = {
+  action: "TIMESHEET_UPDATED" | "TIMESHEET_SUBMITTED" | "TIMESHEET_RESUBMITTED" | "NOTIFICATION_READ";
+  actorUserId: string;
+  createdAt: string;
+  id: string;
+  summary: string;
+  targetId: string;
+};
+
+export type StaticTimesheetRevision = {
+  createdAt: string;
+  entries: StaticTimesheet["entries"];
+  status: TimesheetStatus;
+  version: number;
 };
 
 export type StaticTimesheet = {
@@ -55,6 +74,7 @@ export type StaticTimesheet = {
   periodStart: string;
   rejectedAt: string | null;
   rejectionReason: string | null;
+  revisions: StaticTimesheetRevision[];
   reviewerName: string | null;
   status: TimesheetStatus;
   submittedAt: string | null;
@@ -100,6 +120,8 @@ function entriesForWeek(
 
 @Injectable()
 export class StaticDataService {
+  private readonly dataFile: string | null;
+
   readonly users: StaticUser[] = [
     {
       active: true,
@@ -142,6 +164,7 @@ export class StaticDataService {
       approvedAt: null,
       rejectedAt: null,
       rejectionReason: null,
+      revisions: [],
       reviewerName: "Morgan Lee",
       entries: entriesForWeek({ mon: 8, tue: 8 }, { wed: 7, thu: 8, fri: 8 }),
     },
@@ -157,6 +180,7 @@ export class StaticDataService {
       approvedAt: "2026-08-25T09:10:00.000Z",
       rejectedAt: null,
       rejectionReason: null,
+      revisions: [],
       reviewerName: "Morgan Lee",
       entries: entriesForWeek({ mon: 8, tue: 8, wed: 8 }, { thu: 8, fri: 8 }),
     },
@@ -172,6 +196,7 @@ export class StaticDataService {
       approvedAt: null,
       rejectedAt: "2026-08-18T06:00:00.000Z",
       rejectionReason: "Please move Friday's internal support hours to the client assignment.",
+      revisions: [],
       reviewerName: "Morgan Lee",
       entries: entriesForWeek({ mon: 8, tue: 8, wed: 8 }, { thu: 8, fri: 8 }),
     },
@@ -199,4 +224,57 @@ export class StaticDataService {
       createdAt: "2026-08-25T10:00:00.000Z",
     },
   ];
+
+  readonly auditEvents: StaticAuditEvent[] = [];
+
+  constructor(@Optional() config?: ConfigService) {
+    const configuredPath = config?.get<string>("PULSE_DATA_FILE");
+    this.dataFile = configuredPath
+      ? resolve(configuredPath)
+      : process.env.NODE_ENV === "test"
+        ? null
+        : resolve("data/pulse-ai.json");
+
+    if (!this.dataFile) return;
+    if (existsSync(this.dataFile)) {
+      const stored = JSON.parse(readFileSync(this.dataFile, "utf8")) as {
+        auditEvents?: StaticAuditEvent[];
+        notifications?: StaticNotification[];
+        timesheets?: StaticTimesheet[];
+      };
+      if (stored.timesheets)
+        this.timesheets.splice(
+          0,
+          this.timesheets.length,
+          ...stored.timesheets.map((timesheet) => ({
+            ...timesheet,
+            revisions: timesheet.revisions ?? [],
+          })),
+        );
+      if (stored.notifications) this.notifications.splice(0, this.notifications.length, ...stored.notifications);
+      if (stored.auditEvents) this.auditEvents.splice(0, this.auditEvents.length, ...stored.auditEvents);
+    } else {
+      this.persist();
+    }
+  }
+
+  persist(): void {
+    if (!this.dataFile) return;
+    mkdirSync(dirname(this.dataFile), { recursive: true });
+    const temporaryPath = `${this.dataFile}.tmp`;
+    writeFileSync(
+      temporaryPath,
+      JSON.stringify(
+        {
+          auditEvents: this.auditEvents,
+          notifications: this.notifications,
+          timesheets: this.timesheets,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    renameSync(temporaryPath, this.dataFile);
+  }
 }

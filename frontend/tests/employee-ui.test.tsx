@@ -1,12 +1,33 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import EmployeeDashboardPage from "@/app/(app)/employee/page";
 import TimesheetHistoryPage from "@/app/(app)/employee/timesheets/history/page";
+import { CurrentTimesheetScreen } from "@/features/employee/components/current-timesheet-screen";
 import { TimesheetEditor } from "@/features/employee/components/timesheet-editor";
 import { currentTimesheet } from "@/features/employee/data/mock-employee";
 
+const employeeApi = vi.hoisted(() => ({
+  getCurrentTimesheet: vi.fn(),
+  getEmployeeProfile: vi.fn(),
+  isEmployeeAccessError: () => false,
+  listTimesheets: vi.fn(),
+  saveTimesheet: vi.fn(),
+  submitTimesheet: vi.fn(),
+}));
+
+vi.mock("@/features/employee/data/employee-api", () => employeeApi);
+
 describe("employee experience", () => {
+  beforeEach(() => {
+    employeeApi.getCurrentTimesheet.mockReset();
+    employeeApi.getEmployeeProfile.mockReset();
+    employeeApi.listTimesheets.mockReset();
+    employeeApi.getCurrentTimesheet.mockRejectedValue(new Error("Unavailable"));
+    employeeApi.getEmployeeProfile.mockRejectedValue(new Error("Unavailable"));
+    employeeApi.listTimesheets.mockRejectedValue(new Error("Unavailable"));
+  });
+
   it("presents the current period and primary timesheet action accessibly", async () => {
     const { container } = render(<EmployeeDashboardPage />);
 
@@ -60,5 +81,15 @@ describe("employee experience", () => {
     expect(
       screen.queryByText("Potential duplicate entry on Wednesday"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows the populated static week when the backend is unavailable", async () => {
+    render(<CurrentTimesheetScreen />);
+
+    expect(
+      await screen.findByRole("heading", { name: "My timesheet" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Client portal").length).toBeGreaterThan(0);
+    expect(screen.getByText("Demo data")).toBeInTheDocument();
   });
 });
