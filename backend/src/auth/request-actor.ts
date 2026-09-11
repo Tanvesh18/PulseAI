@@ -1,4 +1,4 @@
-import type { UserRole } from "../data/static-data.service";
+import type { UserRole } from "../data/employee-data";
 
 export type RequestActor = {
   employeeId: string | null;

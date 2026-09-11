@@ -1,85 +1,4 @@
-import { Injectable, Optional } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-
-export type UserRole = "EMPLOYEE" | "MANAGER";
-export type TimesheetStatus =
-  | "DRAFT"
-  | "SUBMITTED"
-  | "RESUBMITTED"
-  | "APPROVED"
-  | "REJECTED"
-  | "REOPENED"
-  | "VOID";
-
-export type StaticUser = {
-  active: boolean;
-  displayName: string;
-  email: string;
-  employeeId: string;
-  id: string;
-  oidcSubject: string;
-  organizationId: string;
-  role: UserRole;
-};
-
-type StaticAssignment = {
-  employeeId: string;
-  id: string;
-  project: string;
-  task: string;
-};
-
-export type StaticNotification = {
-  category: string;
-  createdAt: string;
-  href: string;
-  id: string;
-  message: string;
-  read: boolean;
-  title: string;
-  userId: string;
-};
-
-export type StaticAuditEvent = {
-  action: "TIMESHEET_UPDATED" | "TIMESHEET_SUBMITTED" | "TIMESHEET_RESUBMITTED" | "NOTIFICATION_READ";
-  actorUserId: string;
-  createdAt: string;
-  id: string;
-  summary: string;
-  targetId: string;
-};
-
-export type StaticTimesheetRevision = {
-  createdAt: string;
-  entries: StaticTimesheet["entries"];
-  status: TimesheetStatus;
-  version: number;
-};
-
-export type StaticTimesheet = {
-  approvedAt: string | null;
-  employeeId: string;
-  entries: Array<{
-    assignmentId: string;
-    hours: Record<string, number>;
-    id: string;
-    project: string;
-    task: string;
-  }>;
-  expectedHours: number;
-  id: string;
-  periodEnd: string;
-  periodStart: string;
-  rejectedAt: string | null;
-  rejectionReason: string | null;
-  revisions: StaticTimesheetRevision[];
-  reviewerName: string | null;
-  status: TimesheetStatus;
-  submittedAt: string | null;
-  version: number;
-};
+import type { EmployeeUser, EmployeeAssignment, EmployeeNotification, EmployeeAuditEvent, EmployeeTimesheet, EmployeeProfile, EmployeeData } from "./employee-data";
 
 export const staticIds = {
   organization: "00000000-0000-4000-8000-000000000001",
@@ -99,7 +18,7 @@ const emptyHours = (): Record<string, number> => ({
 function entriesForWeek(
   clientHours: Partial<Record<string, number>>,
   internalHours: Partial<Record<string, number>>,
-): StaticTimesheet["entries"] {
+): EmployeeTimesheet["entries"] {
   return [
     {
       id: staticIds.clientAssignment,
@@ -118,11 +37,9 @@ function entriesForWeek(
   ];
 }
 
-@Injectable()
-export class StaticDataService {
-  private readonly dataFile: string | null;
+export class DemoData implements EmployeeData {
 
-  readonly users: StaticUser[] = [
+  readonly users: EmployeeUser[] = [
     {
       active: true,
       displayName: "Avery Rao",
@@ -135,7 +52,7 @@ export class StaticDataService {
     },
   ];
 
-  readonly profiles = [
+  readonly profiles: EmployeeProfile[] = [
     {
       employeeNumber: "EMP-001",
       expectedWeeklyHours: 40,
@@ -146,12 +63,12 @@ export class StaticDataService {
     },
   ];
 
-  readonly assignments: StaticAssignment[] = [
+  readonly assignments: EmployeeAssignment[] = [
     { employeeId: staticIds.employee, id: staticIds.clientAssignment, project: "Client portal", task: "Implementation" },
     { employeeId: staticIds.employee, id: staticIds.internalAssignment, project: "Internal operations", task: "Team support" },
   ];
 
-  readonly timesheets: StaticTimesheet[] = [
+  readonly timesheets: EmployeeTimesheet[] = [
     {
       id: staticIds.currentTimesheet,
       employeeId: staticIds.employee,
@@ -202,7 +119,7 @@ export class StaticDataService {
     },
   ];
 
-  readonly notifications: StaticNotification[] = [
+  readonly notifications: EmployeeNotification[] = [
     {
       id: "notification-hours",
       userId: staticIds.employeeUser,
@@ -225,56 +142,6 @@ export class StaticDataService {
     },
   ];
 
-  readonly auditEvents: StaticAuditEvent[] = [];
+  readonly auditEvents: EmployeeAuditEvent[] = [];
 
-  constructor(@Optional() config?: ConfigService) {
-    const configuredPath = config?.get<string>("PULSE_DATA_FILE");
-    this.dataFile = configuredPath
-      ? resolve(configuredPath)
-      : process.env.NODE_ENV === "test"
-        ? null
-        : resolve("data/pulse-ai.json");
-
-    if (!this.dataFile) return;
-    if (existsSync(this.dataFile)) {
-      const stored = JSON.parse(readFileSync(this.dataFile, "utf8")) as {
-        auditEvents?: StaticAuditEvent[];
-        notifications?: StaticNotification[];
-        timesheets?: StaticTimesheet[];
-      };
-      if (stored.timesheets)
-        this.timesheets.splice(
-          0,
-          this.timesheets.length,
-          ...stored.timesheets.map((timesheet) => ({
-            ...timesheet,
-            revisions: timesheet.revisions ?? [],
-          })),
-        );
-      if (stored.notifications) this.notifications.splice(0, this.notifications.length, ...stored.notifications);
-      if (stored.auditEvents) this.auditEvents.splice(0, this.auditEvents.length, ...stored.auditEvents);
-    } else {
-      this.persist();
-    }
-  }
-
-  persist(): void {
-    if (!this.dataFile) return;
-    mkdirSync(dirname(this.dataFile), { recursive: true });
-    const temporaryPath = `${this.dataFile}.tmp`;
-    writeFileSync(
-      temporaryPath,
-      JSON.stringify(
-        {
-          auditEvents: this.auditEvents,
-          notifications: this.notifications,
-          timesheets: this.timesheets,
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    renameSync(temporaryPath, this.dataFile);
-  }
 }

@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timesheet Automation Portal</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#222;font-size:14px}
+:root{--blue:#0d6efd;--green:#198754;--red:#dc3545;--orange:#fd7e14;--gray:#6c757d;--dark:#1a2338;--light:#f8f9fa;--border:#dee2e6;--shadow:0 2px 8px rgba(0,0,0,.12)}
+
+/* LAYOUT */
+#app{display:flex;flex-direction:column;min-height:100vh}
+.screen{display:none;flex-direction:column;min-height:100vh}
+.screen.active{display:flex}
+
+/* TOPBAR */
+.topbar{background:var(--dark);color:#fff;padding:0 24px;height:56px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.topbar-logo{font-size:18px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px}
+.topbar-logo span{color:#60a5fa}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:16px}
+.topbar-user{background:rgba(255,255,255,.15);border-radius:20px;padding:4px 14px;font-size:13px;cursor:pointer}
+.topbar-user:hover{background:rgba(255,255,255,.25)}
+.badge-role{background:#3b82f6;color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600}
+.badge-role.finance{background:#16a34a}
+.badge-role.hr{background:#7c3aed}
+.badge-role.director{background:#b45309}
+
+/* SIDEBAR */
+.layout{display:flex;flex:1}
+.sidebar{width:220px;background:#fff;border-right:1px solid var(--border);flex-shrink:0;padding:16px 0;overflow-y:auto}
+.sidebar-section{padding:4px 0 8px}
+.sidebar-label{font-size:11px;font-weight:700;color:var(--gray);padding:8px 20px 4px;text-transform:uppercase;letter-spacing:.5px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:#444;border-left:3px solid transparent;transition:all .15s}
+.nav-item:hover{background:#f0f4ff;color:var(--blue)}
+.nav-item.active{background:#e8f0fe;color:var(--blue);border-left-color:var(--blue);font-weight:600}
+.nav-item .icon{width:18px;text-align:center;font-size:15px}
+.nav-badge{margin-left:auto;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700}
+
+/* MAIN CONTENT */
+.main{flex:1;padding:24px;overflow-y:auto;background:#f0f2f5}
+.page-title{font-size:20px;font-weight:700;color:var(--dark);margin-bottom:4px}
+.page-subtitle{font-size:13px;color:var(--gray);margin-bottom:20px}
+
+/* CARDS */
+.card{background:#fff;border-radius:10px;box-shadow:var(--shadow);padding:20px;margin-bottom:20px}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.card-title{font-size:15px;font-weight:700;color:var(--dark)}
+
+/* STAT CARDS */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.stat-card{background:#fff;border-radius:10px;box-shadow:var(--shadow);padding:18px 20px;display:flex;align-items:center;gap:16px}
+.stat-icon{width:48px;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.stat-icon.blue{background:#dbeafe}
+.stat-icon.green{background:#dcfce7}
+.stat-icon.orange{background:#ffedd5}
+.stat-icon.red{background:#fee2e2}
+.stat-icon.purple{background:#f3e8ff}
+.stat-num{font-size:24px;font-weight:800;color:var(--dark)}
+.stat-label{font-size:12px;color:var(--gray);margin-top:2px}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;text-decoration:none}
+.btn-primary{background:var(--blue);color:#fff}.btn-primary:hover{background:#0b5ed7}
+.btn-success{background:var(--green);color:#fff}.btn-success:hover{background:#146c43}
+.btn-danger{background:var(--red);color:#fff}.btn-danger:hover{background:#b02a37}
+.btn-warning{background:var(--orange);color:#fff}.btn-warning:hover{background:#e8720c}
+.btn-outline{background:#fff;color:var(--blue);border:1px solid var(--blue)}.btn-outline:hover{background:#e8f0fe}
+.btn-gray{background:#e9ecef;color:#444}.btn-gray:hover{background:#dee2e6}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-lg{padding:12px 24px;font-size:15px}
+.btn-icon{padding:6px 10px}
+
+/* TABLE */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:#f8f9fa;font-size:12px;font-weight:700;color:#444;padding:10px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;vertical-align:middle}
+tr:hover td{background:#fafbfc}
+.editable-cell{background:#fffde7;border:1px dashed #f59e0b;border-radius:4px;padding:4px 8px;cursor:pointer;min-width:80px}
+.editable-cell:hover{background:#fef9c3}
+.locked-cell{color:#aaa;font-size:12px}
+.highlight-low{background:#fee2e2 !important;color:#991b1b;font-weight:600}
+.highlight-ok{color:var(--green);font-weight:600}
+
+/* STATUS BADGES */
+.status{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700}
+.status-pending{background:#fef3c7;color:#92400e}
+.status-submitted{background:#dbeafe;color:#1e40af}
+.status-approved{background:#dcfce7;color:#166534}
+.status-rejected{background:#fee2e2;color:#991b1b}
+.status-draft{background:#f3f4f6;color:#374151}
+
+/* FORM */
+.form-row{display:grid;gap:16px;margin-bottom:16px}
+.form-row.cols-2{grid-template-columns:1fr 1fr}
+.form-row.cols-3{grid-template-columns:1fr 1fr 1fr}
+.form-row.cols-4{grid-template-columns:1fr 1fr 1fr 1fr}
+.form-group label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px}
+.form-control{width:100%;border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;transition:.15s}
+.form-control:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(13,110,253,.1)}
+.form-control:disabled{background:#f3f4f6;color:#888}
+
+/* TABS */
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:20px}
+.tab-btn{padding:10px 20px;cursor:pointer;border:none;background:none;font-size:13px;font-weight:600;color:var(--gray);border-bottom:2px solid transparent;margin-bottom:-2px;transition:.15s}
+.tab-btn:hover{color:var(--blue)}
+.tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+/* ALERTS */
+.alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px;font-size:13px}
+.alert-info{background:#dbeafe;color:#1e40af;border-left:4px solid var(--blue)}
+.alert-warning{background:#fef3c7;color:#92400e;border-left:4px solid #f59e0b}
+.alert-success{background:#dcfce7;color:#166534;border-left:4px solid var(--green)}
+.alert-danger{background:#fee2e2;color:#991b1b;border-left:4px solid var(--red)}
+
+/* MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:#fff;border-radius:12px;padding:28px;width:90%;max-width:540px;box-shadow:0 20px 60px rgba(0,0,0,.2);max-height:80vh;overflow-y:auto}
+.modal-title{font-size:17px;font-weight:700;margin-bottom:4px}
+.modal-sub{font-size:13px;color:var(--gray);margin-bottom:20px}
+.modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
+
+/* LOGIN */
+#loginScreen{background:linear-gradient(135deg,#1a2338 0%,#0d6efd 100%);display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-card{background:#fff;border-radius:16px;padding:40px;width:420px;box-shadow:0 24px 80px rgba(0,0,0,.25)}
+.login-logo{text-align:center;margin-bottom:28px}
+.login-logo h1{font-size:22px;font-weight:800;color:var(--dark)}
+.login-logo p{font-size:13px;color:var(--gray);margin-top:4px}
+.login-logo .logo-icon{width:64px;height:64px;background:#e8f0fe;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:32px;margin:0 auto 16px}
+.role-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
+.role-btn{padding:16px;border:2px solid var(--border);border-radius:10px;cursor:pointer;text-align:center;transition:.15s;background:#fff}
+.role-btn:hover{border-color:var(--blue);background:#f0f7ff}
+.role-btn.selected{border-color:var(--blue);background:#e8f0fe}
+.role-btn .role-icon{font-size:28px;margin-bottom:6px}
+.role-btn .role-name{font-size:13px;font-weight:700;color:var(--dark)}
+.role-btn .role-desc{font-size:11px;color:var(--gray)}
+
+/* WORKFLOW STEPS */
+.workflow{display:flex;align-items:center;gap:0;margin-bottom:20px;overflow-x:auto}
+.wf-step{display:flex;align-items:center;gap:8px;padding:10px 20px;background:#fff;border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--gray);position:relative;flex-shrink:0}
+.wf-step:first-child{border-radius:8px 0 0 8px}
+.wf-step:last-child{border-radius:0 8px 8px 0}
+.wf-step.done{background:#dcfce7;color:#166534;border-color:#86efac}
+.wf-step.active{background:#dbeafe;color:#1e40af;border-color:#93c5fd}
+.wf-step .wf-num{width:20px;height:20px;border-radius:50%;background:#e5e7eb;color:#444;font-size:10px;display:flex;align-items:center;justify-content:center}
+.wf-step.done .wf-num{background:#16a34a;color:#fff}
+.wf-step.active .wf-num{background:#2563eb;color:#fff}
+.wf-arrow{color:var(--gray);font-size:16px;flex-shrink:0}
+
+/* NOTIFICATION DOT */
+.notif-dot{width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;margin-left:6px}
+
+/* PROGRESS BAR */
+.progress{background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden;margin:6px 0}
+.progress-bar{background:var(--blue);height:100%;border-radius:4px;transition:.4s}
+.progress-bar.green{background:var(--green)}
+.progress-bar.orange{background:var(--orange)}
+
+/* TOOLTIP */
+.tooltip{position:relative;display:inline-block}
+.tooltip-text{visibility:hidden;background:#1a2338;color:#fff;font-size:11px;padding:4px 8px;border-radius:4px;position:absolute;bottom:110%;left:50%;transform:translateX(-50%);white-space:nowrap;z-index:200}
+.tooltip:hover .tooltip-text{visibility:visible}
+
+/* PILLS */
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.pill-blue{background:#dbeafe;color:#1e40af}
+.pill-green{background:#dcfce7;color:#166534}
+.pill-orange{background:#ffedd5;color:#9a3412}
+.pill-gray{background:#f3f4f6;color:#374151}
+.pill-purple{background:#f3e8ff;color:#6b21a8}
+
+/* REPORT FILTERS */
+.filter-bar{background:#f8f9fa;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.filter-bar .form-group{margin:0;flex:1;min-width:140px}
+.filter-bar .form-group label{font-size:11px}
+
+/* GRID LAYOUT FOR REPORTS */
+.report-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+
+/* SCROLLABLE TABLE CONTAINER */
+.timesheet-wrap{overflow-x:auto;max-height:calc(100vh - 280px);overflow-y:auto}
+.timesheet-wrap thead th{position:sticky;top:0;z-index:10}
+
+/* ACTION ROW */
+.action-bar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.action-bar-right{margin-left:auto;display:flex;gap:10px}
+
+/* HR UPLOAD */
+.upload-zone{border:2px dashed var(--border);border-radius:10px;padding:40px;text-align:center;cursor:pointer;transition:.15s;background:#fafbfc}
+.upload-zone:hover{border-color:var(--blue);background:#f0f7ff}
+.upload-zone .upload-icon{font-size:48px;margin-bottom:10px}
+
+/* APPROVAL SECTION */
+.approval-card{border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;display:flex;align-items:center;gap:16px}
+.approval-info{flex:1}
+.approval-title{font-size:14px;font-weight:700}
+.approval-meta{font-size:12px;color:var(--gray);margin-top:2px}
+
+/* CHART MOCK */
+.bar-chart{display:flex;align-items:flex-end;gap:10px;height:140px;padding:10px 0}
+.bar-wrap{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1}
+.bar{width:100%;border-radius:4px 4px 0 0;transition:.3s;min-width:24px;cursor:pointer}
+.bar:hover{opacity:.8}
+.bar-label{font-size:10px;color:var(--gray);text-align:center}
+.bar-val{font-size:10px;font-weight:700;color:#444;text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ═══════════════ LOGIN SCREEN ═══════════════ -->
+<div id="loginScreen" class="screen active" style="display:flex">
+<div class="login-card">
+  <div class="login-logo">
+    <div class="logo-icon">📋</div>
+    <h1>Timesheet Automation Portal</h1>
+    <p>Emerson — Enterprise IT · India CoE</p>
+  </div>
+  <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Sign in as:</div>
+  <div class="role-grid">
+    <div class="role-btn selected" onclick="selectRole(this,'manager')">
+      <div class="role-icon">👤</div>
+      <div class="role-name">Timesheet Manager</div>
+      <div class="role-desc">Update & submit timesheets</div>
+    </div>
+    <div class="role-btn" onclick="selectRole(this,'finance')">
+      <div class="role-icon">💼</div>
+      <div class="role-name">Finance Team</div>
+      <div class="role-desc">Full access & Oracle export</div>
+    </div>
+    <div class="role-btn" onclick="selectRole(this,'hr')">
+      <div class="role-icon">🧑‍💼</div>
+      <div class="role-name">HR</div>
+      <div class="role-desc">Upload employee data</div>
+    </div>
+    <div class="role-btn" onclick="selectRole(this,'director')">
+      <div class="role-icon">⭐</div>
+      <div class="role-name">Director</div>
+      <div class="role-desc">Review & approve timesheets</div>
+    </div>
+  </div>
+  <button class="btn btn-primary btn-lg" style="width:100%" onclick="login()">Sign In → Demo Portal</button>
+  <div style="text-align:center;margin-top:14px;font-size:11px;color:#aaa">Demo environment — Emerson Internal Use</div>
+</div>
+</div>
+
+<!-- ═══════════════ MAIN APP ═══════════════ -->
+<div id="mainScreen" class="screen">
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-logo">📋 <span>Timesheet</span> Portal</div>
+    <div style="font-size:12px;color:#93c5fd">Billing Cycle: May 23 – Jun 22, 2025</div>
+    <div class="topbar-right">
+      <div style="font-size:13px;color:#e2e8f0">🔔 <span style="background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px" id="notifCount">3</span></div>
+      <div class="topbar-user" onclick="logout()" id="topbarUser">John Miller &nbsp;↩ Logout</div>
+      <span class="badge-role" id="topbarRole">Manager</span>
+    </div>
+  </div>
+  <div class="layout">
+    <!-- SIDEBAR -->
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Main</div>
+        <div class="nav-item active" onclick="showPage('dashboard',this)"><span class="icon">🏠</span> Dashboard</div>
+        <div class="nav-item" onclick="showPage('timesheet',this)"><span class="icon">📋</span> Timesheet Entry</div>
+        <div class="nav-item finance-nav director-nav" onclick="showPage('approval',this)"><span class="icon">✅</span> Approvals <span class="nav-badge" id="approvalBadge">2</span></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Reports</div>
+        <div class="nav-item" onclick="showPage('reports',this)"><span class="icon">📊</span> Reports</div>
+      </div>
+      <div class="sidebar-section finance-nav" id="adminNav">
+        <div class="sidebar-label">Administration</div>
+        <div class="nav-item" onclick="showPage('masters',this)"><span class="icon">🗄️</span> Master Data</div>
+        <div class="nav-item" onclick="showPage('useraccess',this)"><span class="icon">🔐</span> User Access</div>
+        <div class="nav-item" onclick="showPage('hrUpload',this)"><span class="icon">📤</span> HR Data Upload</div>
+      </div>
+      <div class="sidebar-section hr-nav" id="hrNavSection">
+        <div class="sidebar-label">HR Tools</div>
+        <div class="nav-item" onclick="showPage('hrUpload',this)"><span class="icon">📤</span> HR Data Upload</div>
+      </div>
+    </div>
+
+    <!-- PAGES -->
+    <div class="main">
+
+      <!-- ── DASHBOARD ── -->
+      <div id="page-dashboard" class="page-content">
+        <div class="page-title">Dashboard</div>
+        <div class="page-subtitle" id="dashSubtitle">Welcome, John Miller · AUTOSOL Manager</div>
+
+        <!-- Workflow Status -->
+        <div class="card" style="padding:16px 20px">
+          <div class="card-header" style="margin-bottom:10px">
+            <div class="card-title">Billing Cycle Workflow — May 2025</div>
+            <span class="status status-submitted">In Progress</span>
+          </div>
+          <div class="workflow">
+            <div class="wf-step done"><div class="wf-num">✓</div> Cycle Initiated</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step done"><div class="wf-num">✓</div> HR Data Uploaded</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step done"><div class="wf-num">✓</div> B1 Travel Updated</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step active"><div class="wf-num">4</div> Timesheet Entry</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step"><div class="wf-num">5</div> Manager Submit</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step"><div class="wf-num">6</div> Director Approval</div>
+            <div class="wf-arrow">›</div>
+            <div class="wf-step"><div class="wf-num">7</div> Oracle Export</div>
+          </div>
+          <div style="font-size:12px;color:var(--gray)">Deadline: <strong style="color:#dc3545">Jun 25, 2025</strong> &nbsp;·&nbsp; 4 days remaining</div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-icon blue">👥</div>
+            <div><div class="stat-num" id="statEmployees">247</div><div class="stat-label">Active Employees</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon green">✅</div>
+            <div><div class="stat-num" id="statSubmitted">18</div><div class="stat-label">BGs Submitted</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon orange">⏳</div>
+            <div><div class="stat-num" id="statPending">6</div><div class="stat-label">Pending Submission</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon red">⚠️</div>
+            <div><div class="stat-num" id="statLow">14</div><div class="stat-label">Below-167 Hours</div></div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px">
+          <!-- Submission Progress -->
+          <div class="card">
+            <div class="card-header"><div class="card-title">BG-wise Submission Status</div></div>
+            <table><thead><tr><th>Business Group</th><th>Employees</th><th>Submitted</th><th>Status</th><th>Progress</th></tr></thead>
+            <tbody>
+              <tr><td><strong>AUTOSOL</strong></td><td>58</td><td>58</td><td><span class="status status-submitted">Submitted</span></td><td><div class="progress"><div class="progress-bar green" style="width:100%"></div></div></td></tr>
+              <tr><td><strong>ECOE</strong></td><td>42</td><td>42</td><td><span class="status status-approved">Approved</span></td><td><div class="progress"><div class="progress-bar green" style="width:100%"></div></div></td></tr>
+              <tr><td><strong>ACOE</strong></td><td>35</td><td>28</td><td><span class="status status-pending">Pending</span></td><td><div class="progress"><div class="progress-bar orange" style="width:80%"></div></div></td></tr>
+              <tr><td><strong>DASCOE</strong></td><td>29</td><td>20</td><td><span class="status status-pending">Pending</span></td><td><div class="progress"><div class="progress-bar" style="width:69%"></div></div></td></tr>
+              <tr><td><strong>FCTL</strong></td><td>38</td><td>38</td><td><span class="status status-approved">Approved</span></td><td><div class="progress"><div class="progress-bar green" style="width:100%"></div></div></td></tr>
+              <tr><td><strong>MSOL</strong></td><td>31</td><td>15</td><td><span class="status status-draft">In Progress</span></td><td><div class="progress"><div class="progress-bar" style="width:48%"></div></div></td></tr>
+              <tr><td><strong>S&P</strong></td><td>14</td><td>0</td><td><span class="status status-draft">Not Started</span></td><td><div class="progress"><div class="progress-bar" style="width:2%"></div></div></td></tr>
+            </tbody></table>
+          </div>
+          <!-- Alerts -->
+          <div class="card">
+            <div class="card-header"><div class="card-title">🔔 Alerts & Notifications</div></div>
+            <div class="alert alert-warning">⚠️ <div><strong>14 employees</strong> have hours below 167 — remarks required before submission.</div></div>
+            <div class="alert alert-info">📧 <div>Reminder sent to <strong>6 BG managers</strong> for pending timesheets.</div></div>
+            <div class="alert alert-success">✅ <div>3 <strong>new joiners</strong> auto-added with 167 hours (pro-rated).</div></div>
+            <div class="alert alert-danger">🚪 <div>2 <strong>resigned employees</strong> removed from current cycle.</div></div>
+            <button class="btn btn-primary btn-sm" style="width:100%;margin-top:4px" onclick="showPage('timesheet',document.querySelector('.nav-item:nth-child(2)'))">Open My Timesheet →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── TIMESHEET ENTRY ── -->
+      <div id="page-timesheet" class="page-content" style="display:none">
+        <div class="page-title">Timesheet Entry</div>
+        <div class="page-subtitle">Billing Period: May 23 – Jun 22, 2025 &nbsp;·&nbsp; Working Days: 23</div>
+
+        <div class="alert alert-info">ℹ️ <div>Yellow cells are <strong>editable by you</strong>. Greyed fields are locked (Finance only). Hours below 167 are highlighted — add a remark before submitting.</div></div>
+
+        <div class="action-bar">
+          <div class="form-group" style="margin:0">
+            <select class="form-control" id="bgFilter" onchange="filterBG()" style="width:180px">
+              <option value="all">All Business Groups</option>
+              <option value="AUTOSOL" selected>AUTOSOL</option>
+              <option value="ECOE">ECOE</option>
+              <option value="ACOE">ACOE</option>
+              <option value="FCTL">FCTL</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <select class="form-control" style="width:200px">
+              <option>Cost Center: 1234 - AUTOMATION SOLUTIONS</option>
+              <option>Cost Center: 1235 - D&amp;I</option>
+            </select>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="openModal('sharedResourceModal')">➕ Add Shared Resource</button>
+          <div class="action-bar-right">
+            <button class="btn btn-gray btn-sm">💾 Save Draft</button>
+            <button class="btn btn-success" onclick="openModal('submitModal')">📤 Submit for Approval</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding:0">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:#f8f9fa;border-radius:10px 10px 0 0;display:flex;align-items:center;gap:12px">
+            <span style="font-size:13px;font-weight:700">AUTOSOL — Cost Center 1234</span>
+            <span class="pill pill-blue">23 Employees</span>
+            <span class="pill pill-orange">3 Below-167</span>
+            <span style="margin-left:auto;font-size:12px;color:var(--gray)">🔒 Grey = locked &nbsp; 🟡 Yellow = editable</span>
+          </div>
+          <div class="timesheet-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Emp Code</th>
+                <th>Employee Name</th>
+                <th>Business Group</th>
+                <th>Oracle Grade</th>
+                <th>Cost Center</th>
+                <th>Project Code</th>
+                <th>US/Non-US</th>
+                <th>State (US)</th>
+                <th>Hours</th>
+                <th>Remarks</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="timesheetBody">
+              <tr>
+                <td>1</td>
+                <td class="locked-cell">285201</td>
+                <td class="locked-cell">John Miller</td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 5</td>
+                <td class="editable-cell" onclick="editCell(this)">1234</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-ok editable-cell" onclick="editCell(this)">167</td>
+                <td class="editable-cell" onclick="editCell(this)">—</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td class="locked-cell">270011</td>
+                <td class="locked-cell">Sarah Johnson</td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 7</td>
+                <td class="editable-cell" onclick="editCell(this)">1234</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-ok editable-cell" onclick="editCell(this)">167</td>
+                <td class="editable-cell" onclick="editCell(this)">—</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td class="locked-cell">325924</td>
+                <td class="locked-cell">Michael Brown</td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 6</td>
+                <td class="editable-cell" onclick="editCell(this)">1235</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-low editable-cell" onclick="editCell(this)">120</td>
+                <td class="editable-cell" onclick="editCell(this,true)" style="background:#fff3cd;border-color:#f59e0b"><em style="color:#aaa">Required ↑</em></td>
+                <td></td>
+              </tr>
+              <tr>
+                <td>4</td>
+                <td class="locked-cell">251777</td>
+                <td class="locked-cell">Emily Davis</td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 8</td>
+                <td class="editable-cell" onclick="editCell(this)">1236</td>
+                <td class="editable-cell" onclick="editCell(this)">5201 Parts Kitting</td>
+                <td class="editable-cell" onclick="editCell(this)">US</td>
+                <td class="editable-cell" onclick="editCell(this)">TX</td>
+                <td class="highlight-ok editable-cell" onclick="editCell(this)">167</td>
+                <td class="editable-cell" onclick="editCell(this)">B1 Travel</td>
+                <td></td>
+              </tr>
+              <tr style="background:#fffde7">
+                <td>5</td>
+                <td class="locked-cell">412301</td>
+                <td class="locked-cell" style="color:#15803d;font-weight:600">🆕 David Wilson <span class="pill pill-green" style="font-size:10px">New Joiner</span></td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 3</td>
+                <td class="editable-cell" onclick="editCell(this)">1234</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-ok editable-cell" onclick="editCell(this)">112</td>
+                <td class="editable-cell" onclick="editCell(this)">Pro-rated (17 days)</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td>6</td>
+                <td class="locked-cell">265760</td>
+                <td class="locked-cell">Laura Martinez</td>
+                <td class="locked-cell"><span class="pill pill-blue">AUTOSOL</span></td>
+                <td class="locked-cell">Grade 9</td>
+                <td class="editable-cell" onclick="editCell(this)">1234</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-low editable-cell" onclick="editCell(this)">80</td>
+                <td class="editable-cell" onclick="editCell(this,true)"><em style="color:#aaa">Required ↑</em></td>
+                <td></td>
+              </tr>
+              <tr style="background:#f0fff4">
+                <td>7</td>
+                <td class="locked-cell">298451</td>
+                <td class="locked-cell" style="color:#7c3aed;font-weight:600">🔄 Robert Taylor <span class="pill pill-purple" style="font-size:10px">Shared</span></td>
+                <td class="locked-cell"><span class="pill pill-purple">SHARED</span></td>
+                <td class="locked-cell">Grade 5</td>
+                <td class="editable-cell" onclick="editCell(this)">1234</td>
+                <td class="editable-cell" onclick="editCell(this)">3302844</td>
+                <td class="editable-cell" onclick="editCell(this)">Non-US</td>
+                <td class="locked-cell" style="color:#ccc">—</td>
+                <td class="highlight-ok editable-cell" onclick="editCell(this)">167</td>
+                <td class="editable-cell" onclick="editCell(this)">—</td>
+                <td><button class="btn btn-danger btn-sm btn-icon" onclick="openModal('deleteRowModal')" title="Delete Shared Resource">🗑</button></td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <div style="padding:12px 16px;background:#f8f9fa;border-top:1px solid var(--border);border-radius:0 0 10px 10px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:12px;color:var(--gray)">Total Hours: <strong>1,044</strong> &nbsp;·&nbsp; Avg: <strong>149.1</strong> &nbsp;·&nbsp; Short employees: <strong style="color:#dc3545">3</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── APPROVALS ── -->
+      <div id="page-approval" class="page-content" style="display:none">
+        <div class="page-title">Approval Queue</div>
+        <div class="page-subtitle" id="approvalSubtitle">Review and approve submitted timesheets — May 2025</div>
+
+        <div class="alert alert-info">ℹ️ <div id="approvalHelp">Timesheets submitted by managers are listed below. Review and approve or return for corrections.</div></div>
+
+        <div id="approvalCards">
+          <div class="approval-card">
+            <div style="font-size:32px">📋</div>
+            <div class="approval-info">
+              <div class="approval-title">AUTOSOL — Cost Center 1234</div>
+              <div class="approval-meta">Submitted by John Miller · May 24, 2025 · 58 employees · 3 below-167</div>
+              <div style="margin-top:6px"><span class="status status-submitted">Pending Approval</span></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="openModal('reviewModal')">👁 Review</button>
+              <button class="btn btn-success btn-sm" onclick="approveTS(this)">✅ Approve</button>
+              <button class="btn btn-danger btn-sm" onclick="openModal('rejectModal')">↩ Return</button>
+            </div>
+          </div>
+          <div class="approval-card">
+            <div style="font-size:32px">📋</div>
+            <div class="approval-info">
+              <div class="approval-title">ECOE — Cost Center 1235</div>
+              <div class="approval-meta">Submitted by Sarah Johnson · May 23, 2025 · 42 employees · 1 below-167</div>
+              <div style="margin-top:6px"><span class="status status-submitted">Pending Approval</span></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="openModal('reviewModal')">👁 Review</button>
+              <button class="btn btn-success btn-sm" onclick="approveTS(this)">✅ Approve</button>
+              <button class="btn btn-danger btn-sm" onclick="openModal('rejectModal')">↩ Return</button>
+            </div>
+          </div>
+          <div class="approval-card" style="opacity:.6">
+            <div style="font-size:32px">📋</div>
+            <div class="approval-info">
+              <div class="approval-title">FCTL — Cost Center 1236</div>
+              <div class="approval-meta">Submitted by Daniel Anderson · May 22, 2025 · 38 employees</div>
+              <div style="margin-top:6px"><span class="status status-approved">Already Approved</span></div>
+            </div>
+            <div><span style="font-size:20px">✅</span></div>
+          </div>
+        </div>
+
+        <div id="financeOracleSection" style="display:none">
+          <div class="card">
+            <div class="card-header"><div class="card-title">Oracle Export</div><button class="btn btn-success" onclick="openModal('oracleModal')">📤 Export to Oracle Web ADI</button></div>
+            <div class="alert alert-info">ℹ️ <div>Export finalized timesheet data in Oracle Web ADI format. All approved BGs will be included. Pre-export validation removes zero-hour rows and blank lines.</div></div>
+            <table><thead><tr><th>Business Group</th><th>Employees</th><th>Total Hours</th><th>Status</th><th>Approved By</th></tr></thead>
+            <tbody>
+              <tr><td>AUTOSOL</td><td>58</td><td>9,686</td><td><span class="status status-approved">Approved</span></td><td>Thomas Reed</td></tr>
+              <tr><td>ECOE</td><td>42</td><td>7,014</td><td><span class="status status-approved">Approved</span></td><td>Thomas Reed</td></tr>
+              <tr><td>FCTL</td><td>38</td><td>6,346</td><td><span class="status status-approved">Approved</span></td><td>Thomas Reed</td></tr>
+              <tr><td>ACOE</td><td>35</td><td>—</td><td><span class="status status-pending">Pending</span></td><td>—</td></tr>
+            </tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── REPORTS ── -->
+      <div id="page-reports" class="page-content" style="display:none">
+        <div class="page-title">Reports</div>
+        <div class="page-subtitle">Generate and export timesheet reports</div>
+
+        <div class="tab-bar">
+          <button class="tab-btn active" onclick="switchTab('rpt','bpwise',this)">📊 Business Platform Wise</button>
+          <button class="tab-btn" onclick="switchTab('rpt','hourshort',this)">⏱ Hours Short/Excess</button>
+          <button class="tab-btn" onclick="switchTab('rpt','headcount',this)">👥 BG Headcount</button>
+          <button class="tab-btn" onclick="switchTab('rpt','b1travel',this)">✈️ B1 Travel</button>
+          <button class="tab-btn" onclick="switchTab('rpt','paramrpt',this)">🔍 Parameterized</button>
+        </div>
+
+        <!-- Business Platform Wise -->
+        <div id="rpt-bpwise" class="tab-content active">
+          <div class="filter-bar">
+            <div class="form-group"><label>Month From</label><input type="month" class="form-control" value="2025-05"></div>
+            <div class="form-group"><label>Month To</label><input type="month" class="form-control" value="2025-05"></div>
+            <div class="form-group"><label>Business Group</label><select class="form-control"><option>All</option><option>AUTOSOL</option><option>ECOE</option><option>ACOE</option><option>FCTL</option></select></div>
+            <div class="form-group"><label>Business Unit</label><select class="form-control"><option>All</option><option>Engineering</option><option>CoE</option></select></div>
+            <button class="btn btn-primary" style="align-self:flex-end" onclick="showReportData('bpwise')">🔍 Generate</button>
+            <button class="btn btn-success" style="align-self:flex-end">⬇ Export Excel</button>
+          </div>
+          <div id="bpwise-result" class="card" style="display:none;padding:0">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border)"><strong>Business Platform Wise Report — May 2025</strong></div>
+            <div class="table-wrap">
+            <table><thead><tr><th>Cost Center</th><th>Emp Code</th><th>Employee Name</th><th>BG</th><th>BU</th><th>Billing Grade</th><th>Hours</th><th>FX Rate</th><th>Revenue (USD)</th></tr></thead>
+            <tbody>
+              <tr><td>1234</td><td>285201</td><td>John Miller</td><td>AUTOSOL</td><td>Engineering</td><td>Grade 5</td><td>167</td><td>83.5</td><td><strong>$2,428</strong></td></tr>
+              <tr><td>1234</td><td>270011</td><td>Sarah Johnson</td><td>AUTOSOL</td><td>Engineering</td><td>Grade 7</td><td>167</td><td>83.5</td><td><strong>$3,124</strong></td></tr>
+              <tr><td>1235</td><td>325924</td><td>Michael Brown</td><td>DASCOE</td><td>CoE</td><td>DASCoE 5</td><td>167</td><td>83.5</td><td><strong>$4,180</strong></td></tr>
+              <tr><td>1236</td><td>251852</td><td>Emily Davis</td><td>FCTL</td><td>Engineering</td><td>Grade 8</td><td>167</td><td>83.5</td><td><strong>$5,234</strong></td></tr>
+              <tr><td>1234</td><td>265760</td><td>Laura Martinez</td><td>AUTOSOL</td><td>Engineering</td><td>Grade 9</td><td>80</td><td>83.5</td><td><strong style="color:#dc3545">$1,464</strong></td></tr>
+            </tbody></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hours Short / Excess -->
+        <div id="rpt-hourshort" class="tab-content">
+          <div class="filter-bar">
+            <div class="form-group"><label>Billing Month</label><select class="form-control"><option>May 2025</option><option>Apr 2025</option></select></div>
+            <div class="form-group"><label>Business Group</label><select class="form-control"><option>All</option><option>AUTOSOL</option><option>ECOE</option></select></div>
+            <div class="form-group"><label>Hours Filter</label><select class="form-control"><option>All</option><option>Below 167 only</option><option>Above 167 only</option></select></div>
+            <button class="btn btn-primary" style="align-self:flex-end" onclick="showReportData('hourshort')">🔍 Generate</button>
+            <button class="btn btn-success" style="align-self:flex-end">⬇ Export</button>
+          </div>
+          <div id="hourshort-result" class="card" style="display:none;padding:0">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border)"><strong>Hours Short / Excess Report — May 2025</strong> &nbsp;<span class="pill pill-orange">14 employees below 167</span></div>
+            <div class="table-wrap">
+            <table><thead><tr><th>Emp Code</th><th>Name</th><th>BG</th><th>Std Hours</th><th>Actual Hours</th><th>Variance</th><th>Remarks</th></tr></thead>
+            <tbody>
+              <tr><td>325924</td><td>Michael Brown</td><td>AUTOSOL</td><td>167</td><td class="highlight-low">120</td><td style="color:#dc3545">-47</td><td>Medical Leave</td></tr>
+              <tr><td>265760</td><td>Laura Martinez</td><td>AUTOSOL</td><td>167</td><td class="highlight-low">80</td><td style="color:#dc3545">-87</td><td>LOP — 13 days</td></tr>
+              <tr><td>412301</td><td>David Wilson</td><td>AUTOSOL</td><td>167</td><td>112</td><td style="color:var(--orange)">-55</td><td>New Joiner — pro-rated</td></tr>
+              <tr><td>308771</td><td>Emma Thompson</td><td>ECOE</td><td>167</td><td class="highlight-low">145</td><td style="color:#dc3545">-22</td><td>Casual Leave</td></tr>
+            </tbody></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- BG Headcount -->
+        <div id="rpt-headcount" class="tab-content">
+          <div class="filter-bar">
+            <div class="form-group"><label>Billing Month</label><select class="form-control"><option>May 2025</option><option>Apr 2025</option></select></div>
+            <button class="btn btn-primary" style="align-self:flex-end" onclick="showReportData('headcount')">🔍 Generate</button>
+            <button class="btn btn-success" style="align-self:flex-end">⬇ Export</button>
+          </div>
+          <div id="headcount-result" class="card" style="display:none">
+            <div class="card-header"><div class="card-title">BG-wise Headcount — May 2025</div></div>
+            <div class="bar-chart">
+              <div class="bar-wrap"><div class="bar-val">58</div><div class="bar" style="background:#3b82f6;height:100%"></div><div class="bar-label">AUTOSOL</div></div>
+              <div class="bar-wrap"><div class="bar-val">42</div><div class="bar" style="background:#10b981;height:72%"></div><div class="bar-label">ECOE</div></div>
+              <div class="bar-wrap"><div class="bar-val">35</div><div class="bar" style="background:#f59e0b;height:60%"></div><div class="bar-label">ACOE</div></div>
+              <div class="bar-wrap"><div class="bar-val">29</div><div class="bar" style="background:#8b5cf6;height:50%"></div><div class="bar-label">DASCOE</div></div>
+              <div class="bar-wrap"><div class="bar-val">38</div><div class="bar" style="background:#ef4444;height:65%"></div><div class="bar-label">FCTL</div></div>
+              <div class="bar-wrap"><div class="bar-val">31</div><div class="bar" style="background:#06b6d4;height:53%"></div><div class="bar-label">MSOL</div></div>
+              <div class="bar-wrap"><div class="bar-val">14</div><div class="bar" style="background:#f97316;height:24%"></div><div class="bar-label">S&P</div></div>
+            </div>
+            <div class="table-wrap" style="margin-top:12px">
+            <table><thead><tr><th>Business Group</th><th>Active</th><th>New Joiners</th><th>Resigned</th><th>B1 Travel</th><th>Transfers</th><th>Total Billed Hours</th></tr></thead>
+            <tbody>
+              <tr><td>AUTOSOL</td><td>58</td><td>3</td><td>1</td><td>2</td><td>0</td><td>9,686</td></tr>
+              <tr><td>ECOE</td><td>42</td><td>1</td><td>0</td><td>1</td><td>1</td><td>7,014</td></tr>
+              <tr><td>ACOE</td><td>35</td><td>0</td><td>2</td><td>0</td><td>0</td><td>5,845</td></tr>
+              <tr><td>DASCOE</td><td>29</td><td>2</td><td>0</td><td>0</td><td>0</td><td>4,843</td></tr>
+              <tr><td>FCTL</td><td>38</td><td>0</td><td>1</td><td>3</td><td>0</td><td>6,346</td></tr>
+            </tbody></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- B1 Travel -->
+        <div id="rpt-b1travel" class="tab-content">
+          <div class="filter-bar">
+            <div class="form-group"><label>Date From</label><input type="date" class="form-control" value="2025-05-01"></div>
+            <div class="form-group"><label>Date To</label><input type="date" class="form-control" value="2025-05-31"></div>
+            <div class="form-group"><label>Business Group</label><select class="form-control"><option>All</option><option>AUTOSOL</option></select></div>
+            <div class="form-group"><label>US State</label><select class="form-control"><option>All States</option><option>TX</option><option>CA</option><option>WA</option></select></div>
+            <button class="btn btn-primary" style="align-self:flex-end" onclick="showReportData('b1travel')">🔍 Generate</button>
+            <button class="btn btn-success" style="align-self:flex-end">⬇ Export</button>
+          </div>
+          <div id="b1travel-result" class="card" style="display:none;padding:0">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border)"><strong>B1 Travel Report — May 2025</strong></div>
+            <div class="table-wrap">
+            <table><thead><tr><th>Emp Code</th><th>Name</th><th>BG</th><th>Travel From</th><th>Travel To</th><th>Days</th><th>US State</th><th>Travel Hours</th><th>Remaining Hours</th></tr></thead>
+            <tbody>
+              <tr><td>251777</td><td>Kedar Joshi</td><td>AUTOSOL</td><td>2025-05-01</td><td>2025-05-15</td><td>15</td><td>TX</td><td>103</td><td>64</td></tr>
+              <tr><td>265760</td><td>Laura Martinez</td><td>AUTOSOL</td><td>2025-05-10</td><td>2025-05-22</td><td>13</td><td>CA</td><td>87</td><td>80</td></tr>
+              <tr><td>308771</td><td>Snehal Kulkarni</td><td>ECOE</td><td>2025-05-05</td><td>2025-05-18</td><td>14</td><td>WA</td><td>94</td><td>73</td></tr>
+            </tbody></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Parameterized -->
+        <div id="rpt-paramrpt" class="tab-content">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:14px">Configure Report Parameters</div>
+            <div class="form-row cols-3">
+              <div class="form-group"><label>Date Range From</label><input type="month" class="form-control" value="2025-04"></div>
+              <div class="form-group"><label>Date Range To</label><input type="month" class="form-control" value="2025-05"></div>
+              <div class="form-group"><label>Business Platform</label><select class="form-control"><option>All</option><option>Engineering</option><option>CoE</option><option>Corp</option></select></div>
+            </div>
+            <div class="form-row cols-4">
+              <div class="form-group"><label>Employee Code</label><input type="text" class="form-control" placeholder="e.g. 285201"></div>
+              <div class="form-group"><label>Business Group</label><select class="form-control"><option>All</option><option>AUTOSOL</option><option>ECOE</option><option>ACOE</option></select></div>
+              <div class="form-group"><label>Business Unit</label><select class="form-control"><option>All</option><option>Engineering</option><option>CoE</option></select></div>
+              <div class="form-group"><label>Include Revenue</label><select class="form-control"><option>Yes</option><option>No</option></select></div>
+            </div>
+            <button class="btn btn-primary" onclick="showReportData('paramrpt')">🔍 Generate Report</button>
+            <button class="btn btn-success" style="margin-left:8px">⬇ Export Excel</button>
+          </div>
+          <div id="paramrpt-result" style="display:none" class="card" style="padding:0">
+            <div style="margin-bottom:10px;font-weight:700">Multi-Period Report — Apr–May 2025</div>
+            <div class="table-wrap">
+            <table><thead><tr><th>Period</th><th>Emp Code</th><th>Name</th><th>BG</th><th>BU</th><th>Billing Grade</th><th>Hours</th><th>Rate/Hr</th><th>Revenue (INR)</th><th>FX</th><th>Revenue (USD)</th></tr></thead>
+            <tbody>
+              <tr><td>Apr-25</td><td>285201</td><td>John Miller</td><td>AUTOSOL</td><td>Engg</td><td>Grade 5</td><td>167</td><td>₹2,640</td><td>₹4,40,880</td><td>83.5</td><td>$5,280</td></tr>
+              <tr><td>May-25</td><td>285201</td><td>John Miller</td><td>AUTOSOL</td><td>Engg</td><td>Grade 5</td><td>167</td><td>₹2,640</td><td>₹4,40,880</td><td>83.5</td><td>$5,280</td></tr>
+              <tr><td>Apr-25</td><td>270011</td><td>Sarah Johnson</td><td>AUTOSOL</td><td>Engg</td><td>Grade 7</td><td>167</td><td>₹3,480</td><td>₹5,81,160</td><td>83.5</td><td>$6,960</td></tr>
+              <tr><td>May-25</td><td>270011</td><td>Sarah Johnson</td><td>AUTOSOL</td><td>Engg</td><td>Grade 7</td><td>167</td><td>₹3,480</td><td>₹5,81,160</td><td>83.5</td><td>$6,960</td></tr>
+            </tbody></table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── MASTER DATA ── -->
+      <div id="page-masters" class="page-content" style="display:none">
+        <div class="page-title">Master Data Management</div>
+        <div class="page-subtitle">Finance team only — manage reference data used across all timesheets</div>
+
+        <div class="tab-bar">
+          <button class="tab-btn active" onclick="switchTab('mst','bglist',this)">Business Groups</button>
+          <button class="tab-btn" onclick="switchTab('mst','projectcodes',this)">Project Codes</button>
+          <button class="tab-btn" onclick="switchTab('mst','costcenters',this)">Cost Centers</button>
+          <button class="tab-btn" onclick="switchTab('mst','ratecard',this)">Rate Card</button>
+          <button class="tab-btn" onclick="switchTab('mst','fxrate',this)">FX Rate</button>
+        </div>
+
+        <div id="mst-bglist" class="tab-content active">
+          <div class="action-bar"><button class="btn btn-primary btn-sm">➕ Add Business Group</button><button class="btn btn-success btn-sm">⬇ Export</button></div>
+          <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Sr No.</th><th>Business Group</th><th>First Level</th><th>Second Level</th><th>Contribution %</th><th>Actions</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><strong>ACOE</strong></td><td>ACOE</td><td>—</td><td>100%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>2</td><td><strong>AICOE</strong></td><td>DASCOE</td><td>—</td><td>100%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>3</td><td><strong>AUTOSOL</strong></td><td>Engineering</td><td>Corp Engineering</td><td>0%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>4</td><td><strong>AUTOSOL</strong></td><td>Engineering</td><td>FEA - Full Time</td><td>0%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>5</td><td><strong>ECOE</strong></td><td>ECOE</td><td>—</td><td>100%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>6</td><td><strong>FCTL</strong></td><td>Engineering</td><td>—</td><td>100%</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+          </tbody></table></div></div>
+        </div>
+
+        <div id="mst-projectcodes" class="tab-content">
+          <div class="action-bar"><button class="btn btn-primary btn-sm">➕ Add Project Code</button><button class="btn btn-success btn-sm">⬆ Import</button><button class="btn btn-gray btn-sm">⬇ Export</button></div>
+          <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Sr No.</th><th>Project Code</th><th>Description</th><th>Business Group</th><th>Actions</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>3302844</td><td>ACOE1229_CFD Simulation_KEG GS1</td><td>ACOE</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>2</td><td>5201 Parts Kitting</td><td>5201 Parts Kitting-SOAP Service</td><td>COMRES</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>3</td><td>2460 HW update</td><td>2460 HW update man hours cost</td><td>ECOE</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>4</td><td>50 W Driver</td><td>50 W Driver man hours cost</td><td>ECOE</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+          </tbody></table></div></div>
+        </div>
+
+        <div id="mst-costcenters" class="tab-content">
+          <div class="action-bar"><button class="btn btn-primary btn-sm">➕ Add Cost Center</button></div>
+          <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Code</th><th>Cost Center Name</th><th>Business Group</th><th>Owner</th><th>Actions</th></tr></thead>
+          <tbody>
+            <tr><td>5050</td><td>CORP_TALENT POOL</td><td>CORP</td><td>Kedar Joshi (251777)</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>1235</td><td>DASCoE</td><td>DASCOE</td><td>Michael Brown (325924)</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>1234</td><td>AUTOMATION SOLUTIONS</td><td>AUTOSOL</td><td>Laura Martinez (265760)</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>1235</td><td>D&amp;I</td><td>D&amp;I</td><td>Emily Davis (251852)</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+          </tbody></table></div></div>
+        </div>
+
+        <div id="mst-ratecard" class="tab-content">
+          <div class="action-bar"><button class="btn btn-primary btn-sm">➕ Add Grade</button></div>
+          <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Sr No.</th><th>Grade</th><th>Rate/Hour (INR)</th><th>Salary Range Min</th><th>Salary Range Max</th><th>Actions</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Grade 1</td><td>₹1,100</td><td>₹1,00,000</td><td>₹9,25,000</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>2</td><td>Grade 2</td><td>₹1,370</td><td>₹9,25,001</td><td>₹13,10,000</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>3</td><td>ACoE 1 (CoE Project Cost)</td><td>₹1,370</td><td>₹1,00,000</td><td>₹9,25,000</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>4</td><td>ACoE 10 (CoE Project Cost)</td><td>₹3,360</td><td>—</td><td>—</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>5</td><td>ECoE 1 (CoE Project Cost)</td><td>₹1,370</td><td>₹1,00,000</td><td>₹9,25,000</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+          </tbody></table></div></div>
+        </div>
+
+        <div id="mst-fxrate" class="tab-content">
+          <div class="action-bar"><button class="btn btn-primary btn-sm">➕ Add FX Rate</button><span class="alert alert-info" style="margin:0;padding:6px 12px">Current Rate: <strong>₹83.5 / USD</strong> (May 2025)</span></div>
+          <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Month</th><th>USD Rate (INR)</th><th>EUR Rate (INR)</th><th>Updated By</th><th>Updated On</th><th>Actions</th></tr></thead>
+          <tbody>
+            <tr><td>May 2025</td><td><strong>83.50</strong></td><td>90.20</td><td>Deepti Godbole</td><td>May 01, 2025</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>Apr 2025</td><td>83.85</td><td>90.55</td><td>Deepti Godbole</td><td>Apr 01, 2025</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+            <tr><td>Mar 2025</td><td>82.90</td><td>89.80</td><td>Deepti Godbole</td><td>Mar 01, 2025</td><td><button class="btn btn-gray btn-sm">✏️ Edit</button></td></tr>
+          </tbody></table></div></div>
+        </div>
+      </div>
+
+      <!-- ── USER ACCESS ── -->
+      <div id="page-useraccess" class="page-content" style="display:none">
+        <div class="page-title">User Access Management</div>
+        <div class="page-subtitle">Finance can independently grant or revoke access — no IT dependency</div>
+        <div class="alert alert-success">✅ <div>Access changes take effect immediately. No IT ticket required.</div></div>
+        <div class="action-bar">
+          <button class="btn btn-primary" onclick="openModal('addUserModal')">➕ Grant Access</button>
+          <div class="action-bar-right"><input type="text" class="form-control" placeholder="🔍 Search by name or email" style="width:240px"></div>
+        </div>
+        <div class="card" style="padding:0"><div class="table-wrap"><table><thead><tr><th>Emp Code</th><th>Name</th><th>Email</th><th>Business Group</th><th>Role</th><th>Cost Centers</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr><td>285201</td><td>John Miller</td><td>John.Miller@emerson.com</td><td>AUTOSOL</td><td><span class="pill pill-blue">Manager</span></td><td>1234, 1235</td><td><span class="status status-approved">Active</span></td><td><button class="btn btn-danger btn-sm" onclick="openModal('revokeModal')">🔒 Revoke</button></td></tr>
+          <tr><td>430933</td><td>Akshay Dhumal</td><td>Akshay.Dhumal@emerson.com</td><td>CORP</td><td><span class="pill pill-purple">HR</span></td><td>All</td><td><span class="status status-approved">Active</span></td><td><button class="btn btn-danger btn-sm" onclick="openModal('revokeModal')">🔒 Revoke</button></td></tr>
+          <tr><td>270011</td><td>Sarah Johnson</td><td>Sarah.Johnson@emerson.com</td><td>ECOE</td><td><span class="pill pill-blue">Manager</span></td><td>1235</td><td><span class="status status-approved">Active</span></td><td><button class="btn btn-danger btn-sm" onclick="openModal('revokeModal')">🔒 Revoke</button></td></tr>
+          <tr><td>258602</td><td>Deepti Godbole</td><td>deepti.godbole@emerson.com</td><td>—</td><td><span class="pill pill-green">Finance</span></td><td>All</td><td><span class="status status-approved">Active</span></td><td><button class="btn btn-danger btn-sm" onclick="openModal('revokeModal')">🔒 Revoke</button></td></tr>
+          <tr><td>341120</td><td>Suresh Nair</td><td>suresh.nair@emerson.com</td><td>MSOL</td><td><span class="pill pill-blue">Manager</span></td><td>5090</td><td><span class="status status-pending">Suspended</span></td><td><button class="btn btn-success btn-sm">🔓 Restore</button></td></tr>
+        </tbody></table></div></div>
+      </div>
+
+      <!-- ── HR UPLOAD ── -->
+      <div id="page-hrUpload" class="page-content" style="display:none">
+        <div class="page-title">HR Data Upload</div>
+        <div class="page-subtitle">Upload the monthly employee list to initiate timesheet generation</div>
+
+        <div class="alert alert-warning">⏰ <div><strong>Action Required:</strong> Finance has requested the employee list for May 2025 billing cycle. Please upload by <strong>May 20, 2025</strong>.</div></div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:14px">Upload Employee List</div>
+            <div class="upload-zone" onclick="openModal('uploadSuccessModal')">
+              <div class="upload-icon">📂</div>
+              <div style="font-weight:700;margin-bottom:4px">Click to upload or drag & drop</div>
+              <div style="font-size:12px;color:var(--gray)">Accepted: .xlsx (HR Employee List format)<br>Tabs: All Employees, Transfer Resources, Contract Resources, Departures, Interns, Salary Change</div>
+            </div>
+            <div style="margin-top:12px;font-size:12px;color:var(--gray)">Last uploaded: <strong>Apr 18, 2025</strong> by Akshay Dhumal</div>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="margin-bottom:14px">Required File Tabs</div>
+            <table><thead><tr><th>Tab Name</th><th>Purpose</th><th>Auto-Action</th></tr></thead>
+            <tbody>
+              <tr><td>All Employees</td><td>Full employee master</td><td>Populates timesheet</td></tr>
+              <tr><td>Transfer Resources</td><td>CC transfers this month</td><td>Splits into 2 rows</td></tr>
+              <tr><td>Contract Resources</td><td>Contract staff grades</td><td>Auto-grade assignment</td></tr>
+              <tr><td>Departures</td><td>Resigned employees</td><td>Removes from next cycle</td></tr>
+              <tr><td>Interns</td><td>Intern records</td><td>Excluded from billing</td></tr>
+              <tr><td>Salary Change</td><td>CTC revisions</td><td>Updates billing grade</td></tr>
+            </tbody></table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div class="card-title">Upload History</div></div>
+          <table><thead><tr><th>Month</th><th>File</th><th>Uploaded By</th><th>Date</th><th>Records</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Apr 2025</td><td>HR_EmpList_Apr2025.xlsx</td><td>Akshay Dhumal</td><td>Apr 18, 2025</td><td>247</td><td><span class="status status-approved">Processed</span></td></tr>
+            <tr><td>Mar 2025</td><td>HR_EmpList_Mar2025.xlsx</td><td>Akshay Dhumal</td><td>Mar 19, 2025</td><td>243</td><td><span class="status status-approved">Processed</span></td></tr>
+            <tr><td>Feb 2025</td><td>HR_EmpList_Feb2025.xlsx</td><td>Akshay Dhumal</td><td>Feb 17, 2025</td><td>240</td><td><span class="status status-approved">Processed</span></td></tr>
+          </tbody></table>
+        </div>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /layout -->
+</div><!-- /mainScreen -->
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- Add Shared Resource -->
+<div id="sharedResourceModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">➕ Add Shared Resource</div>
+  <div class="modal-sub">Employee details will auto-populate from HR master. Enter project code, cost center, and hours.</div>
+  <div class="form-row cols-2">
+    <div class="form-group"><label>Employee Code *</label><input type="text" class="form-control" placeholder="e.g. 298451" id="sharedEmpCode"></div>
+    <div class="form-group"><label>Employee Name</label><input type="text" class="form-control" value="Auto-populated" disabled></div>
+  </div>
+  <div class="form-row cols-2">
+    <div class="form-group"><label>Business Group</label><input type="text" class="form-control" value="Auto-populated" disabled></div>
+    <div class="form-group"><label>Oracle Grade</label><input type="text" class="form-control" value="Auto-populated" disabled></div>
+  </div>
+  <div class="form-row cols-3">
+    <div class="form-group"><label>Project Code *</label><select class="form-control"><option>3302844</option><option>5201 Parts Kitting</option><option>2460 HW update</option></select></div>
+    <div class="form-group"><label>Cost Center *</label><select class="form-control"><option>1234</option><option>1235</option><option>1236</option></select></div>
+    <div class="form-group"><label>Hours *</label><input type="number" class="form-control" value="167" min="1" max="200"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('sharedResourceModal')">Cancel</button>
+    <button class="btn btn-primary" onclick="addSharedResource()">✅ Add Resource</button>
+  </div>
+</div>
+</div>
+
+<!-- Submit Confirmation -->
+<div id="submitModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">📤 Submit Timesheet for Approval</div>
+  <div class="modal-sub">This will lock the timesheet and send it to your Director for approval.</div>
+  <div class="alert alert-warning">⚠️ <div><strong>3 employees</strong> have hours below 167. Please ensure remarks are filled before submitting.</div></div>
+  <div style="font-size:13px;margin-bottom:8px"><strong>Summary:</strong></div>
+  <ul style="font-size:13px;padding-left:20px;line-height:2">
+    <li>Cost Center: 1234 — AUTOMATION SOLUTIONS</li>
+    <li>Total Employees: 7</li>
+    <li>Total Hours: 1,044</li>
+    <li>Approver: Thomas Reed (Director)</li>
+  </ul>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('submitModal')">← Back to Edit</button>
+    <button class="btn btn-success" onclick="submitTimesheet()">✅ Confirm Submit</button>
+  </div>
+</div>
+</div>
+
+<!-- Review Modal -->
+<div id="reviewModal" class="modal-overlay">
+<div class="modal" style="max-width:640px">
+  <div class="modal-title">👁 Review — AUTOSOL Timesheet</div>
+  <div class="modal-sub">Submitted by John Miller · May 24, 2025</div>
+  <table><thead><tr><th>Emp Code</th><th>Name</th><th>Hours</th><th>Remarks</th></tr></thead>
+  <tbody>
+    <tr><td>285201</td><td>John Miller</td><td class="highlight-ok">167</td><td>—</td></tr>
+    <tr><td>270011</td><td>Sarah Johnson</td><td class="highlight-ok">167</td><td>—</td></tr>
+    <tr><td>325924</td><td>Michael Brown</td><td class="highlight-low">120</td><td>Medical Leave</td></tr>
+    <tr><td>251777</td><td>Emily Davis</td><td class="highlight-ok">167</td><td>B1 Travel - TX</td></tr>
+    <tr><td>412301</td><td>David Wilson</td><td>112</td><td>New Joiner - pro-rated</td></tr>
+    <tr><td>265760</td><td>Laura Martinez</td><td class="highlight-low">80</td><td>LOP — 13 days</td></tr>
+  </tbody></table>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('reviewModal')">Close</button>
+  </div>
+</div>
+</div>
+
+<!-- Reject Modal -->
+<div id="rejectModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">↩ Return for Correction</div>
+  <div class="modal-sub">The timesheet will be sent back to the manager with your comments.</div>
+  <div class="form-group"><label>Reason for Return *</label><textarea class="form-control" rows="3" placeholder="e.g. Please add remarks for all employees with hours below 167"></textarea></div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('rejectModal')">Cancel</button>
+    <button class="btn btn-danger" onclick="closeModal('rejectModal');showToast('Timesheet returned to manager','warning')">↩ Return Timesheet</button>
+  </div>
+</div>
+</div>
+
+<!-- Oracle Export -->
+<div id="oracleModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">📤 Export to Oracle Web ADI</div>
+  <div class="modal-sub">Generates finalized timesheet in Oracle-compatible Web ADI format.</div>
+  <div class="alert alert-info">ℹ️ <div>Pre-export validation will automatically remove zero-hour rows, blank entries, and non-back-charging cost centers.</div></div>
+  <div class="form-row cols-2">
+    <div class="form-group"><label>Export Format</label><select class="form-control"><option>Oracle Web ADI (.xlsx)</option><option>Oracle Direct Upload</option><option>Excel Summary</option></select></div>
+    <div class="form-group"><label>Include BGs</label><select class="form-control"><option>Approved BGs Only</option><option>All BGs</option></select></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('oracleModal')">Cancel</button>
+    <button class="btn btn-success" onclick="closeModal('oracleModal');showToast('Oracle export generated successfully!','success')">📤 Generate Export</button>
+  </div>
+</div>
+</div>
+
+<!-- Delete Shared Resource -->
+<div id="deleteRowModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">🗑 Remove Shared Resource</div>
+  <div class="modal-sub">Robert Taylor (298451) — Shared Resource</div>
+  <div class="alert alert-warning">⚠️ <div>Only shared resources can be deleted. HR-list employees cannot be removed.</div></div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('deleteRowModal')">Cancel</button>
+    <button class="btn btn-danger" onclick="deleteSharedRow()">🗑 Confirm Delete</button>
+  </div>
+</div>
+</div>
+
+<!-- Revoke User -->
+<div id="revokeModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">🔒 Revoke User Access</div>
+  <div class="modal-sub">The user will immediately lose access to the timesheet portal.</div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('revokeModal')">Cancel</button>
+    <button class="btn btn-danger" onclick="closeModal('revokeModal');showToast('Access revoked successfully','warning')">🔒 Revoke Access</button>
+  </div>
+</div>
+</div>
+
+<!-- Add User -->
+<div id="addUserModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">➕ Grant Portal Access</div>
+  <div class="modal-sub">Assign a role and cost center(s) to the user.</div>
+  <div class="form-row cols-2">
+    <div class="form-group"><label>Employee Code *</label><input type="text" class="form-control" placeholder="e.g. 285201"></div>
+    <div class="form-group"><label>Role *</label><select class="form-control"><option>Manager</option><option>Finance</option><option>HR</option><option>Director</option></select></div>
+  </div>
+  <div class="form-group"><label>Cost Centers (comma-separated)</label><input type="text" class="form-control" placeholder="e.g. 1234, 1235"></div>
+  <div class="modal-footer">
+    <button class="btn btn-gray" onclick="closeModal('addUserModal')">Cancel</button>
+    <button class="btn btn-primary" onclick="closeModal('addUserModal');showToast('Access granted successfully','success')">✅ Grant Access</button>
+  </div>
+</div>
+</div>
+
+<!-- Upload Success -->
+<div id="uploadSuccessModal" class="modal-overlay">
+<div class="modal">
+  <div class="modal-title">✅ HR Data Uploaded Successfully</div>
+  <div class="modal-sub">Employee list processed for May 2025 billing cycle</div>
+  <div class="alert alert-success">✅ <div><strong>251 records</strong> processed · 3 new joiners · 1 resigned · 2 transfers</div></div>
+  <div style="font-size:13px"><strong>Auto-actions taken:</strong></div>
+  <ul style="font-size:13px;padding-left:20px;line-height:2;margin-top:6px">
+    <li>🆕 3 new joiners added with pro-rated hours</li>
+    <li>🚪 1 resigned employee removed from active list</li>
+    <li>🔄 2 transfer employees split into dual cost-center rows</li>
+    <li>⭐ Billing grades auto-updated from salary band</li>
+    <li>✈️ B1 travel hours auto-adjusted for 3 employees</li>
+  </ul>
+  <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal('uploadSuccessModal')">Done</button></div>
+</div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" style="position:fixed;bottom:28px;right:28px;background:#1a2338;color:#fff;padding:12px 22px;border-radius:8px;font-size:13px;font-weight:600;z-index:2000;display:none;box-shadow:0 4px 20px rgba(0,0,0,.25);max-width:340px;transition:.3s">
+  <span id="toastMsg"></span>
+</div>
+
+<script>
+// ── STATE ──
+let currentRole = 'manager';
+let currentUser = { manager:{name:'John Miller',role:'Manager',badge:'manager'}, finance:{name:'Emily Carter',role:'Finance',badge:'finance'}, hr:{name:'Brian Scott',role:'HR',badge:'hr'}, director:{name:'Thomas Reed',role:'Director',badge:'director'} };
+
+// ── LOGIN ──
+function selectRole(el, role) {
+  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected'); currentRole = role;
+}
+function login() {
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('mainScreen').classList.add('active');
+  applyRole(currentRole);
+  showPage('dashboard', document.querySelector('.nav-item'));
+}
+function logout() {
+  document.getElementById('mainScreen').classList.remove('active');
+  document.getElementById('loginScreen').style.display='flex';
+}
+
+function applyRole(role) {
+  const u = currentUser[role];
+  document.getElementById('topbarUser').textContent = u.name + '  ↩ Logout';
+  document.getElementById('topbarRole').textContent = u.role;
+  document.getElementById('topbarRole').className = 'badge-role ' + u.badge;
+
+  // Show/hide nav sections
+  const financeItems = document.querySelectorAll('.finance-nav');
+  const hrItems = document.querySelectorAll('.hr-nav');
+  financeItems.forEach(el => el.style.display = (role==='finance') ? '' : 'none');
+  hrItems.forEach(el => el.style.display = (role==='hr') ? '' : 'none');
+  document.getElementById('adminNav').style.display = (role==='finance') ? '' : 'none';
+  document.getElementById('hrNavSection').style.display = (role==='hr') ? '' : 'none';
+  document.getElementById('approvalBadge').style.display = (role==='director'||role==='finance') ? '' : 'none';
+
+  // Update subtitle
+  const subtitles = {manager:'Welcome, John Miller · AUTOSOL Manager', finance:'Welcome, Emily Carter · Finance Team', hr:'Welcome, Brian Scott · HR', director:'Welcome, Thomas Reed · Director'};
+  document.getElementById('dashSubtitle').textContent = subtitles[role];
+
+  // Director/Finance approval section
+  document.getElementById('financeOracleSection').style.display = (role==='finance') ? '' : 'none';
+
+  // Stats
+  if(role==='manager') { document.getElementById('statEmployees').textContent='23'; document.getElementById('statSubmitted').textContent='1'; document.getElementById('statPending').textContent='0'; document.getElementById('statLow').textContent='3'; }
+  else { document.getElementById('statEmployees').textContent='247'; document.getElementById('statSubmitted').textContent='18'; document.getElementById('statPending').textContent='6'; document.getElementById('statLow').textContent='14'; }
+
+  const approvalHelp = document.getElementById('approvalHelp');
+  if(role==='director') approvalHelp.innerHTML = 'Timesheets submitted by managers are listed below. Review and approve or return for corrections.';
+  else if(role==='finance') approvalHelp.innerHTML = 'Finance view — all submitted timesheets. You can modify before Oracle export and view full audit trail.';
+}
+
+// ── NAVIGATION ──
+function showPage(pageId, navEl) {
+  document.querySelectorAll('.page-content').forEach(p=>p.style.display='none');
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  const page = document.getElementById('page-'+pageId);
+  if(page) page.style.display='block';
+  if(navEl) navEl.classList.add('active');
+}
+
+// ── TABS ──
+function switchTab(prefix, tabId, btn) {
+  document.querySelectorAll('[id^="'+prefix+'-"]').forEach(t=>t.classList.remove('active'));
+  document.getElementById(prefix+'-'+tabId).classList.add('active');
+  btn.closest('.tab-bar').querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// ── MODALS ──
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', function(e){ if(e.target===this) this.classList.remove('open'); }));
+
+// ── INLINE CELL EDITING ──
+function editCell(cell, isRemark) {
+  if(cell.querySelector('input')) return;
+  const orig = cell.textContent.trim();
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.value = (orig==='Required ↑'||orig==='—') ? '' : orig;
+  inp.style.cssText = 'width:100%;border:none;background:transparent;font-size:13px;outline:none;font-family:inherit';
+  cell.innerHTML = ''; cell.appendChild(inp); inp.focus();
+  inp.addEventListener('blur', ()=>{ let v=inp.value.trim()||orig; cell.textContent=v; if(isRemark&&v) cell.style.fontStyle='normal'; validateHours(cell); });
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter') inp.blur(); });
+}
+
+function validateHours(cell) {
+  const row = cell.closest('tr');
+  if(!row) return;
+  const cells = row.querySelectorAll('td');
+  const hoursCell = cells[9];
+  if(!hoursCell) return;
+  const hrs = parseInt(hoursCell.textContent);
+  if(!isNaN(hrs)) {
+    if(hrs < 167) { hoursCell.classList.add('highlight-low'); hoursCell.classList.remove('highlight-ok'); }
+    else { hoursCell.classList.remove('highlight-low'); hoursCell.classList.add('highlight-ok'); }
+  }
+}
+
+// ── ACTIONS ──
+function addSharedResource() {
+  closeModal('sharedResourceModal');
+  showToast('Shared resource added to timesheet','success');
+}
+function submitTimesheet() {
+  closeModal('submitModal');
+  showPage('dashboard', document.querySelector('.nav-item'));
+  showToast('Timesheet submitted! Notification sent to Director.','success');
+  document.getElementById('notifCount').textContent='4';
+}
+function approveTS(btn) {
+  const card = btn.closest('.approval-card');
+  card.querySelector('.status').className='status status-approved'; card.querySelector('.status').textContent='Approved';
+  btn.parentElement.innerHTML='<span style="font-size:20px">✅</span>';
+  card.style.opacity='.6';
+  showToast('Timesheet approved. Manager notified.','success');
+  const badge = document.getElementById('approvalBadge');
+  const n = parseInt(badge.textContent)-1; badge.textContent = n<0?0:n;
+}
+function deleteSharedRow() {
+  closeModal('deleteRowModal');
+  const rows = document.querySelectorAll('#timesheetBody tr');
+  rows.forEach(r=>{ if(r.textContent.includes('Robert Taylor')) r.remove(); });
+  showToast('Shared resource removed','warning');
+}
+function filterBG() { /* demo — already showing AUTOSOL */ }
+
+function showReportData(id) {
+  ['bpwise','hourshort','headcount','b1travel','paramrpt'].forEach(r=>{
+    const el = document.getElementById(r+'-result');
+    if(el) el.style.display = (r===id) ? '' : 'none';
+  });
+  if(id==='paramrpt') { document.getElementById('paramrpt-result').style.display=''; }
+}
+
+// ── TOAST ──
+function showToast(msg, type) {
+  const t = document.getElementById('toast'); const m = document.getElementById('toastMsg');
+  t.style.background = type==='success'?'#16a34a':type==='warning'?'#d97706':'#1a2338';
+  m.textContent = (type==='success'?'✅ ':type==='warning'?'⚠️ ':'')+msg;
+  t.style.display='block'; setTimeout(()=>t.style.display='none', 3200);
+}
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 
 Pulse AI is an enterprise workforce-management application for recording, validating, submitting, and reviewing employee timesheets. The long-term product vision connects time capture to manager approvals, payroll preparation, invoicing, notifications, audit trails, and carefully scoped AI assistance.
 
-This repository currently contains an end-to-end **Employee timesheet vertical slice**: a responsive Next.js frontend communicates with a NestJS API to load, edit, save, submit, and review weekly timesheets. Local development state is seeded and durably written to a JSON data file; a production SQL database remains planned.
+This repository currently contains an end-to-end **Employee timesheet vertical slice**: a responsive Next.js frontend communicates with a NestJS API to load, edit, save, submit, and review weekly timesheets. Application data is stored in PostgreSQL through Prisma. A hosted database connection is required; demo data can be seeded explicitly.
 
 ## Table of contents
 
@@ -37,7 +37,7 @@ Pulse AI is a functional prototype, not a production-ready workforce system.
 | Save and submit operations                             | Implemented through the NestJS API             |
 | Input validation and optimistic concurrency            | Implemented                                    |
 | Development authentication and OIDC token verification | Implemented                                    |
-| Persistent storage                                     | Local atomic JSON persistence implemented; SQL planned |
+| Persistent storage                                     | PostgreSQL with Prisma and transactional writes |
 | Manager, HR, Finance, and Director workspaces          | Planned                                        |
 | Approval, payroll, invoice, and audit workflows        | Planned                                        |
 | Anomaly detection and LLM assistant                    | Deterministic unusual-hours checks and scoped read-only query API implemented; external LLM planned |
@@ -81,11 +81,11 @@ The current Employee experience includes:
 - `jose` for OIDC/JWT verification through a remote JWKS
 - Helmet for security headers
 - Jest for unit tests
-- Seeded local data with atomic JSON-file persistence for development
+- PostgreSQL with Prisma, versioned migrations, and an explicit demo seed
 
 ### Planned platform components
 
-The product documents describe PostgreSQL, Prisma migrations, background jobs, anomaly-detection services, audit logging, and a permission-aware LLM assistant. These components are part of the planned architecture and are **not present in the current codebase**.
+PostgreSQL and Prisma migrations are implemented. Background jobs and an external LLM remain planned; the API includes audit events and a deterministic employee-scoped assistant.
 
 ## Architecture
 
@@ -96,7 +96,7 @@ flowchart LR
     P -->|/api/v1/*| A[NestJS API<br/>localhost:4000]
     A --> G[Employee auth guard]
     G --> S[Employee service]
-    S --> D[Seeded persistent local data]
+    S --> D[PostgreSQL via Prisma]
     G -. production bearer token .-> I[OIDC issuer / JWKS]
 ```
 
@@ -111,7 +111,7 @@ PulseAI_Emerson/
 |-- backend/                 # NestJS API
 |   |-- src/
 |   |   |-- auth/            # Employee guard and request actor
-|   |   |-- data/            # Seeded local persistence boundary
+|   |   |-- data/            # PostgreSQL repository and Prisma client
 |   |   |-- employee/        # Employee endpoints, service, and DTOs
 |   |   |-- app.module.ts
 |   |   `-- main.ts
@@ -145,7 +145,7 @@ Generated folders such as `frontend/.next`, `backend/dist`, and each application
 - npm 10 or newer
 - Two terminal windows for local development
 
-No database or external identity provider is needed for the default local setup.
+A hosted PostgreSQL database is required. An external identity provider is optional for development.
 
 ### 1. Install dependencies
 
@@ -163,7 +163,7 @@ Use `npm install` instead if you intentionally need to update a lockfile.
 
 ### 2. Create local environment files
 
-The checked-in defaults already work for local development, so this step is optional. Copy the examples if you want explicit local configuration:
+Copy the examples, then set `DATABASE_URL` in `backend/.env` to the connection URL from your hosted PostgreSQL provider:
 
 ```powershell
 Copy-Item backend/.env.example backend/.env
@@ -172,7 +172,24 @@ Copy-Item frontend/.env.example frontend/.env.local
 
 Do not commit real identity-provider credentials or other secrets.
 
-### 3. Start the backend
+### 3. Prepare PostgreSQL
+
+For the prepared Neon setup, follow [Hosted PostgreSQL setup](backend/docs/hosted-postgresql.md).
+
+Use a dedicated empty database for this application. Keep the provider's TLS settings in its connection URL. If the provider supplies separate pooled and direct URLs, set `DATABASE_URL` to the runtime URL and `DIRECT_URL` to the direct migration URL. Never put either secret in frontend environment variables.
+
+```powershell
+cd backend
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+```
+
+The seed creates demo employee Avery and sample timesheets without overwriting existing rows. It is optional and refuses to run with `NODE_ENV=production`; production employee provisioning is separate. Startup fails when PostgreSQL is unavailable or `DATABASE_URL` is missing. There is no JSON persistence fallback.
+
+Existing `backend/data/pulse-ai.json` files are left untouched and are not imported automatically. If they contain work you need, retain a backup and migrate it separately before switching environments.
+
+### 4. Start the backend
 
 In the first terminal:
 
@@ -183,7 +200,7 @@ npm run start:dev
 
 The API starts at `http://localhost:4000/api/v1` by default.
 
-### 4. Start the frontend
+### 5. Start the frontend
 
 In the second terminal:
 
@@ -194,7 +211,7 @@ npm run dev
 
 Open `http://localhost:3000`. The root page redirects to the Employee workspace.
 
-### 5. Try the vertical slice
+### 6. Try the vertical slice
 
 1. Open **Current timesheet** from the Employee overview.
 2. Adjust hours for one or more assignments.
@@ -217,6 +234,8 @@ The backend reads `backend/.env` through NestJS Config.
 | `OIDC_ISSUER`      | Provider URL                          | Expected token issuer                                          |
 | `OIDC_AUDIENCE`    | `pulse-ai-api`                        | Expected token audience                                        |
 | `OIDC_JWKS_URL`    | Provider JWKS URL                     | Public signing-key endpoint used to verify tokens              |
+| `DATABASE_URL` | Required | Hosted PostgreSQL connection URL (server only) |
+| `DIRECT_URL` | Optional | Direct database URL for Prisma migrations |
 | `NODE_ENV`         | Runtime-defined                       | Controls development versus production authentication defaults |
 
 If a bearer token is supplied, all three OIDC settings must be configured. In production, a bearer token is required unless development authentication is explicitly enabled; do not enable development authentication in a real deployment.
@@ -353,12 +372,12 @@ The repository-level `design.md` is the design authority. `frontend/src/styles/t
 
 ## Known limitations
 
-- Development persistence uses a local JSON file, not a production SQL database or transactional repository.
+- Timesheet entries and revision snapshots currently use PostgreSQL JSONB columns; users, profiles, assignments, timesheets, notifications, and audit events have separate tables.
 - Only one seeded Employee identity and a small set of assignments, notifications, and timesheets are available.
 - There is no frontend sign-in or token-acquisition flow.
 - Manager approval and rejection endpoints are not implemented.
 - HR, Finance, and Director roles are not implemented.
-- There is no PostgreSQL schema, migration system, background worker, email delivery, payroll export, invoice generation, or audit-event store.
+- There is no background worker, email delivery, payroll export, or invoice generation.
 - Unusual-hours findings use a transparent deterministic threshold; no trained statistical model is running.
 - The assistant supports a small permission-scoped read-only query set; no external LLM or generative-AI service is connected.
 - The prototype should not be used for real employee, payroll, compensation, or customer data.
@@ -367,7 +386,7 @@ The repository-level `design.md` is the design authority. `frontend/src/styles/t
 
 The documented product direction is to expand from the Employee slice into a complete weekly workflow:
 
-1. Add PostgreSQL persistence, migrations, seed tooling, and transactional repositories.
+1. Add production employee provisioning and operational database backup/restore procedures.
 2. Complete authentication and backend-enforced role, organization, resource, action, and field-level authorization.
 3. Add scheduled reminders, background delivery, retries, and user notification preferences.
 4. Add manager review queues, rejection decisions, approval, locking, and reopen controls.
@@ -392,3 +411,11 @@ AI is intended to supplement deterministic controls. It must not approve timeshe
 Keep changes aligned with `PRODUCT.md` and `design.md`, preserve backend authorization boundaries, and avoid presenting planned capabilities as implemented. Add or update tests with behavior changes and run the relevant check suite before submitting work.
 
 This repository does not currently declare a license. Treat the source as private unless the project owner adds one.
+
+### Database validation
+
+`cd backend; npm run check` runs type checking, lint, unit tests, and a build. To run real PostgreSQL persistence and concurrency tests, configure `TEST_DATABASE_URL` to a separate migrated test database, then run `npm run test:integration`. These tests create and clean up only their own employee records. They do not use `DATABASE_URL`.
+
+Workflow requests load fresh employee-scoped records inside a database transaction. A PostgreSQL row lock serializes operations for the same employee across API processes; timesheet changes, revisions, notifications, and audit events commit together. Stale versions still return HTTP 409. No process-wide mutable data cache is used.
+
+Prisma connection configuration: [official documentation](https://docs.prisma.io/docs/orm/v7/reference/connection-urls).

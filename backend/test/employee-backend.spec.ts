@@ -4,14 +4,12 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
+import type { PrismaService } from "../src/data/prisma.service";
 import type { Request } from "express";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { EmployeeAuthGuard } from "../src/auth/employee-auth.guard";
 import type { RequestActor } from "../src/auth/request-actor";
-import { StaticDataService, staticIds } from "../src/data/static-data.service";
-import { EmployeeService } from "../src/employee/employee.service";
+import { DemoData, staticIds } from "../src/data/demo-data";
+import { EmployeeWorkflow } from "../src/employee/employee.workflow";
 
 jest.mock("jose", () => ({
   createRemoteJWKSet: jest.fn(),
@@ -25,9 +23,9 @@ const actor: RequestActor = {
   userId: staticIds.employeeUser,
 };
 
-describe("EmployeeService", () => {
+describe("EmployeeWorkflow", () => {
   it("returns only the authenticated employee profile", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
 
     expect(service.getProfile(actor)).toEqual(
       expect.objectContaining({
@@ -39,7 +37,7 @@ describe("EmployeeService", () => {
   });
 
   it("does not disclose a missing employee profile", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
 
     expect(() =>
       service.getProfile({ ...actor, userId: "missing-user" }),
@@ -47,7 +45,7 @@ describe("EmployeeService", () => {
   });
 
   it("updates static timesheet data in memory", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
     const current = service.getCurrentTimesheet(actor);
 
     const updated = service.updateTimesheet(actor, current.id, {
@@ -66,7 +64,7 @@ describe("EmployeeService", () => {
   });
 
   it("prevents an empty timesheet from being submitted", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
     const current = service.getCurrentTimesheet(actor);
     const emptied = service.updateTimesheet(actor, current.id, {
       expectedVersion: current.version,
@@ -84,7 +82,7 @@ describe("EmployeeService", () => {
   });
 
   it("answers only supported employee-scoped assistant questions", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
 
     expect(service.askAssistant(actor, "Summarize my hours")).toMatchObject({
       readOnly: true,
@@ -97,7 +95,7 @@ describe("EmployeeService", () => {
   });
 
   it("marks only the authenticated employee notification as read", () => {
-    const service = new EmployeeService(new StaticDataService());
+    const service = new EmployeeWorkflow(new DemoData());
     const notification = service.listNotifications(actor)[0];
 
     expect(service.markNotificationRead(actor, notification.id).read).toBe(
@@ -109,36 +107,7 @@ describe("EmployeeService", () => {
     });
   });
 
-  it("restores saved employee timesheets from the configured data file", () => {
-    const directory = mkdtempSync(join(tmpdir(), "pulse-ai-data-"));
-    const dataFile = join(directory, "employee.json");
-    const config = {
-      get: (key: string) => (key === "PULSE_DATA_FILE" ? dataFile : undefined),
-    } as ConfigService;
 
-    try {
-      const firstData = new StaticDataService(config);
-      const firstService = new EmployeeService(firstData);
-      const current = firstService.getCurrentTimesheet(actor);
-      const updated = firstService.updateTimesheet(actor, current.id, {
-        expectedVersion: current.version,
-        entries: [
-          {
-            assignmentId: staticIds.clientAssignment,
-            days: [{ date: "2026-08-24", hours: 7 }],
-          },
-        ],
-      });
-
-      const restored = new EmployeeService(
-        new StaticDataService(config),
-      ).getCurrentTimesheet(actor);
-      expect(restored.version).toBe(updated.version);
-      expect(restored.entries[0]?.hours.mon).toBe(7);
-    } finally {
-      rmSync(directory, { force: true, recursive: true });
-    }
-  });
 });
 
 function contextFor(request: Partial<Request>) {
@@ -160,7 +129,7 @@ describe("EmployeeAuthGuard", () => {
     const config = { get: () => undefined } as unknown as ConfigService;
 
     await expect(
-      new EmployeeAuthGuard(config, new StaticDataService()).canActivate(
+      new EmployeeAuthGuard(config, authDatabase()).canActivate(
         contextFor(request),
       ),
     ).resolves.toBe(true);
@@ -171,7 +140,7 @@ describe("EmployeeAuthGuard", () => {
     const request = { headers: {} } as Request;
     const allowed = await new EmployeeAuthGuard(
       devConfig(),
-      new StaticDataService(),
+      authDatabase(),
     ).canActivate(contextFor(request));
 
     expect(allowed).toBe(true);
@@ -182,8 +151,7 @@ describe("EmployeeAuthGuard", () => {
   });
 
   it("does not allow a non-employee through Employee endpoints", async () => {
-    const data = new StaticDataService();
-    data.users[0].role = "MANAGER";
+    const data = authDatabase("MANAGER");
 
     await expect(
       new EmployeeAuthGuard(devConfig(), data).canActivate(
@@ -198,9 +166,14 @@ describe("EmployeeAuthGuard", () => {
     } as ConfigService;
 
     await expect(
-      new EmployeeAuthGuard(config, new StaticDataService()).canActivate(
+      new EmployeeAuthGuard(config, authDatabase()).canActivate(
         contextFor({ headers: {} }),
       ),
     ).rejects.toThrow("A bearer access token is required.");
   });
 });
+
+function authDatabase(role: "EMPLOYEE" | "MANAGER" = "EMPLOYEE"): PrismaService {
+  const user = new DemoData().users[0];
+  return { user: { findUnique: jest.fn().mockResolvedValue({ ...user, role }) } } as unknown as PrismaService;
+}

@@ -3,4 +3,5 @@ dist/
 coverage/
 .env
 generated/
-data/
+/data/
+src/generated/

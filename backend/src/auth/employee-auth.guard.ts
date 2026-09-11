@@ -8,19 +8,19 @@ import {
 import { ConfigService } from "@nestjs/config";
 import type { Request } from "express";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { StaticDataService } from "../data/static-data.service";
+import { PrismaService } from "../data/prisma.service";
 
 @Injectable()
 export class EmployeeAuthGuard implements CanActivate {
   constructor(
     private readonly config: ConfigService,
-    private readonly data: StaticDataService,
+    private readonly data: PrismaService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
     const subject = await this.resolveSubject(request);
-    const user = this.data.users.find((item) => item.oidcSubject === subject);
+    const user = await this.data.user.findUnique({ where: { oidcSubject: subject } });
 
     if (!user?.active || user.role !== "EMPLOYEE" || !user.employeeId) {
       throw new UnauthorizedException(

@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  EMPLOYEE
+  MANAGER
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  RESUBMITTED
+  APPROVED
+  REJECTED
+  REOPENED
+  VOID
+}
+
+model User {
+  id String @id
+  active Boolean @default(true)
+  displayName String
+  email String @unique
+  employeeId String @unique
+  oidcSubject String @unique
+  organizationId String
+  role UserRole
+  profile EmployeeProfile?
+  notifications Notification[]
+  auditEvents AuditEvent[]
+}
+
+model EmployeeProfile {
+  id String @id
+  employeeNumber String
+  expectedWeeklyHours Int
+  organization String
+  timezone String
+  userId String @unique
+  user User @relation(fields: [userId], references: [id])
+  assignments Assignment[]
+  timesheets Timesheet[]
+}
+
+model Assignment {
+  id String @id
+  employeeId String
+  project String
+  task String
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id])
+  @@index([employeeId])
+}
+
+model Timesheet {
+  id String @id
+  employeeId String
+  periodStart String
+  periodEnd String
+  status TimesheetStatus @default(DRAFT)
+  version Int @default(1)
+  expectedHours Int
+  submittedAt String?
+  approvedAt String?
+  rejectedAt String?
+  rejectionReason String?
+  reviewerName String?
+  entries Json
+  revisions Json
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id])
+  @@unique([employeeId, periodStart])
+}
+
+model Notification {
+  id String @id
+  userId String
+  category String
+  createdAt String
+  href String
+  message String
+  read Boolean @default(false)
+  title String
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId, createdAt])
+}
+
+model AuditEvent {
+  id String @id
+  action String
+  actorUserId String
+  createdAt String
+  summary String
+  targetId String
+  actor User @relation(fields: [actorUserId], references: [id])
+  @@index([actorUserId, createdAt])
+}
