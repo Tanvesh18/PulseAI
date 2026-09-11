@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { seedPortal } from "./seed-portal";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { DemoData } from "../src/data/demo-data";
@@ -19,6 +20,7 @@ async function main() {
     for (const sheet of data.timesheets) await tx.timesheet.upsert({ where: { id: sheet.id }, create: sheet, update: {} });
     for (const notification of data.notifications) await tx.notification.upsert({ where: { id: notification.id }, create: notification, update: {} });
   }, { maxWait: 10000, timeout: 30000 });
+  await seedPortal(prisma);
   console.log("Demo employee data seeded in PostgreSQL.");
 }
 

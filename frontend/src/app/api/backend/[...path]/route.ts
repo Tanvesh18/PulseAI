@@ -26,6 +26,16 @@ async function proxy(
       headers.set("authorization", `Bearer ${decodeURIComponent(token)}`);
   }
 
+  if (env.NODE_ENV !== "production") {
+    const role = request.headers
+      .get("cookie")
+      ?.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("pulse_demo_role="))
+      ?.split("=")[1];
+    if (role && ["MANAGER", "FINANCE", "HR", "DIRECTOR"].includes(role))
+      headers.set("x-dev-role", role);
+  }
   try {
     const response = await fetch(target, {
       method: request.method,

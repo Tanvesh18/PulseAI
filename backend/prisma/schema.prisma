@@ -11,6 +11,9 @@ datasource db {
 enum UserRole {
   EMPLOYEE
   MANAGER
+  FINANCE
+  HR
+  DIRECTOR
 }
 
 enum TimesheetStatus {
@@ -31,6 +34,7 @@ model User {
   employeeId String @unique
   oidcSubject String @unique
   organizationId String
+  costCenters String[] @default([])
   role UserRole
   profile EmployeeProfile?
   notifications Notification[]
@@ -99,4 +103,64 @@ model AuditEvent {
   targetId String
   actor User @relation(fields: [actorUserId], references: [id])
   @@index([actorUserId, createdAt])
+}
+
+model WorkforceEmployee {
+  id String @id @default(uuid())
+  organizationId String
+  code String
+  name String
+  email String
+  businessGroup String
+  grade String
+  billingGrade String
+  costCenter String
+  joinDate String
+  exitDate String?
+  transferDate String?
+  previousCostCenter String?
+  annualSalary Float @default(0)
+  travelFrom String?
+  travelTo String?
+  usState String?
+  category String @default("Employee")
+  @@unique([organizationId, code])
+}
+
+model BusinessTimesheet {
+  id String @id @default(uuid())
+  organizationId String
+  period String
+  businessGroup String
+  costCenter String
+  managerUserId String
+  status TimesheetStatus @default(DRAFT)
+  version Int @default(1)
+  rows Json
+  submittedAt String?
+  reviewedAt String?
+  reviewerUserId String?
+  returnReason String?
+  exportedAt String?
+  @@unique([organizationId, period, costCenter])
+  @@index([organizationId, period, status])
+}
+
+model MasterRecord {
+  id String @id @default(uuid())
+  organizationId String
+  kind String
+  code String
+  data Json
+  @@unique([organizationId, kind, code])
+}
+
+model HRImport {
+  id String @id @default(uuid())
+  organizationId String
+  period String
+  actorUserId String
+  filename String
+  summary Json
+  createdAt DateTime @default(now())
 }

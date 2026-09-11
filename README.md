@@ -5,6 +5,8 @@ Pulse AI is an enterprise workforce-management application for recording, valida
 
 This repository currently contains an end-to-end **Employee timesheet vertical slice**: a responsive Next.js frontend communicates with a NestJS API to load, edit, save, submit, and review weekly timesheets. Application data is stored in PostgreSQL through Prisma. A hosted database connection is required; demo data can be seeded explicitly.
 
+The team workspace at `/portal` implements the HTML mockup's manager, Finance, HR, and director workflows using the existing visual system. See [feature coverage and operational boundaries](backend/docs/mockup-features.md).
+
 ## Table of contents
 
 - [Current status](#current-status)
@@ -38,8 +40,8 @@ Pulse AI is a functional prototype, not a production-ready workforce system.
 | Input validation and optimistic concurrency            | Implemented                                    |
 | Development authentication and OIDC token verification | Implemented                                    |
 | Persistent storage                                     | PostgreSQL with Prisma and transactional writes |
-| Manager, HR, Finance, and Director workspaces          | Planned                                        |
-| Approval, payroll, invoice, and audit workflows        | Planned                                        |
+| Manager, HR, Finance, and Director workspaces          | Implemented at `/portal` |
+| Monthly approvals, audit, and Excel staging exports | Implemented; payroll and invoicing remain planned |
 | Anomaly detection and LLM assistant                    | Deterministic unusual-hours checks and scoped read-only query API implemented; external LLM planned |
 
 ## Features

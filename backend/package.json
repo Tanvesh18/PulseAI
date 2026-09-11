@@ -15,8 +15,9 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "test:integration": "jest --runInBand --testRegex=postgres.integration.ts$",
-    "db:setup": "npm run db:generate && npm run db:migrate && npm run db:seed"
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testRegex=postgres.integration.ts$",
+    "db:setup": "npm run db:generate && npm run db:migrate && npm run db:seed",
+    "test:portal": "node scripts/test-portal.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -28,6 +29,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "helmet": "^8.1.0",
     "jose": "^6.1.0",
     "reflect-metadata": "^0.2.2",

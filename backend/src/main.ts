@@ -1,14 +1,16 @@
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
+import { json } from "express";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   const config = app.get(ConfigService);
   app.setGlobalPrefix("api/v1");
   app.use(helmet());
+  app.use(json({ limit: "9mb" }));
   app.enableCors({
     origin: config.get<string>("FRONTEND_ORIGIN") ?? "http://localhost:3000",
     credentials: true,

@@ -13,8 +13,8 @@ import { PrismaService } from "../data/prisma.service";
 @Injectable()
 export class EmployeeAuthGuard implements CanActivate {
   constructor(
-    private readonly config: ConfigService,
-    private readonly data: PrismaService,
+    protected readonly config: ConfigService,
+    protected readonly data: PrismaService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -37,7 +37,7 @@ export class EmployeeAuthGuard implements CanActivate {
     return true;
   }
 
-  private async resolveSubject(request: Request): Promise<string> {
+  protected async resolveSubject(request: Request): Promise<string> {
     const authorization = request.headers.authorization;
     if (authorization?.startsWith("Bearer ")) {
       const issuer = this.config.get<string>("OIDC_ISSUER");

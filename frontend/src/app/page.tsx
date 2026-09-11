@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { LandingSignIn } from "@/features/portal/landing-sign-in";
 
 export default function Home() {
-  redirect("/employee");
+  return <LandingSignIn />;
 }

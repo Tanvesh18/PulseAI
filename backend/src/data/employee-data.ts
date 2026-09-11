@@ -1,4 +1,4 @@
-export type UserRole = "EMPLOYEE" | "MANAGER";
+export type UserRole = "EMPLOYEE" | "MANAGER" | "FINANCE" | "HR" | "DIRECTOR";
 export type TimesheetStatus =
   | "DRAFT"
   | "SUBMITTED"

@@ -1,20 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { redirect } from "next/navigation";
 import { describe, expect, it, vi } from "vitest";
 import Home from "@/app/page";
 import { AppShell } from "@/components/shell/app-shell";
+import { LandingSignIn } from "@/features/portal/landing-sign-in";
 
 vi.mock("next/navigation", () => ({
-  redirect: vi.fn(),
+  useRouter: () => ({ push: vi.fn() }),
   usePathname: () => "/employee",
 }));
 
 describe("application entry points", () => {
-  it("redirects the root route to the employee experience", () => {
-    Home();
-
-    expect(redirect).toHaveBeenCalledWith("/employee");
+  it("shows the workspace selector at the root route", () => {
+    expect(Home().type).toBe(LandingSignIn);
   });
 
   it("provides labelled employee navigation and utility controls", async () => {
