@@ -1,4 +1,10 @@
 .neon
 .env.local
+.codex/
+.agents/
+.claude/
+.cursor/
+.gemini/
+.impeccable/
 node_modules/
 node_modules/
