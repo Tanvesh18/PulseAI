@@ -7,12 +7,14 @@ import {
   Building2,
   ShieldCheck,
   Upload,
+  LockKeyhole,
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/features/employee/components/page-header";
+import { PageHeader } from "@/components/layout/page-header";
 import type { Role } from "./types";
 import styles from "./portal.module.css";
+import { isWorkspaceEnabled } from "@/config/workspace-focus";
 
 const roles: ReadonlyArray<{
   value: Role;
@@ -48,16 +50,24 @@ const roles: ReadonlyArray<{
 
 export function LandingSignIn() {
   const router = useRouter();
-  const [selectedRole, setSelectedRole] = useState<Role>("MANAGER");
-  const [demoEnabled, setDemoEnabled] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<Role>("DIRECTOR");
+  const [sessionStatus, setSessionStatus] = useState<
+    "loading" | "demo" | "organization" | "error"
+  >("loading");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetch("/api/demo-session")
-      .then((response) => response.json() as Promise<{ enabled: boolean }>)
-      .then((result) => setDemoEnabled(result.enabled))
-      .catch(() => setDemoEnabled(false));
+      .then((response) => {
+        if (!response.ok)
+          throw new Error("Unable to check sign-in availability.");
+        return response.json() as Promise<{ enabled: boolean }>;
+      })
+      .then((result) =>
+        setSessionStatus(result.enabled ? "demo" : "organization"),
+      )
+      .catch(() => setSessionStatus("error"));
   }, []);
 
   async function signIn() {
@@ -73,7 +83,7 @@ export function LandingSignIn() {
         message?: string;
       } | null;
       if (!response.ok) throw new Error(payload?.message ?? "Sign-in failed.");
-      router.push("/portal");
+      router.push("/dashboard");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Sign-in failed.");
     } finally {
@@ -89,50 +99,65 @@ export function LandingSignIn() {
       <div className={styles.landingPanel}>
         <PageHeader
           title="Timesheet Automation Portal"
-          description="Choose your workspace to continue."
+          description="Choose your role. Only Director is available right now."
         />
-        {demoEnabled ? (
-          <>
-            <div
-              className={styles.roleGrid}
-              role="group"
-              aria-label="Choose a workspace"
+        <div
+          className={styles.roleGrid}
+          role="group"
+          aria-label="Choose a workspace"
+        >
+          {roles.map(({ value, label, description, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              className={`${styles.roleCard} ${selectedRole === value ? styles.roleCardSelected : ""}`}
+              aria-pressed={selectedRole === value}
+              disabled={busy || !isWorkspaceEnabled(value)}
+              onClick={() => setSelectedRole(value)}
             >
-              {roles.map(({ value, label, description, icon: Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={`${styles.roleCard} ${selectedRole === value ? styles.roleCardSelected : ""}`}
-                  aria-pressed={selectedRole === value}
-                  onClick={() => setSelectedRole(value)}
-                >
-                  <span className={styles.roleIcon} aria-hidden="true">
-                    <Icon size={22} />
-                  </span>
-                  <span>
-                    <strong>{label}</strong>
-                    <small>{description}</small>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <Button
-              className={styles.landingAction}
-              disabled={busy}
-              onClick={() => void signIn()}
-            >
-              {busy ? "Signing in..." : "Sign in to demo portal"}
-            </Button>
-            <p className={styles.muted}>
-              Demo environment - Changes are saved to PostgreSQL.
-            </p>
-          </>
-        ) : (
+              <span className={styles.roleIcon} aria-hidden="true">
+                {isWorkspaceEnabled(value) ? (
+                  <Icon size={22} />
+                ) : (
+                  <LockKeyhole size={22} />
+                )}
+              </span>
+              <span>
+                <strong>{label}</strong>
+                <small>
+                  {isWorkspaceEnabled(value)
+                    ? description
+                    : "Under maintenance"}
+                </small>
+              </span>
+            </button>
+          ))}
+        </div>
+        <Button
+          className={styles.landingAction}
+          disabled={busy || sessionStatus !== "demo"}
+          onClick={() => void signIn()}
+        >
+          {busy
+            ? "Signing in..."
+            : sessionStatus === "loading"
+              ? "Checking sign-in..."
+              : sessionStatus === "demo"
+                ? "Continue as Director"
+                : "Organization sign-in required"}
+        </Button>
+        {sessionStatus === "demo" ? (
+          <p className={styles.muted}>Demo environment</p>
+        ) : sessionStatus === "organization" ? (
           <Alert title="Organization sign-in required" tone="info">
-            Demo role selection is disabled in production. Sign in through your
+            Demo sign-in is disabled in this environment. Sign in through your
             organization&apos;s identity provider.
           </Alert>
-        )}
+        ) : sessionStatus === "error" ? (
+          <Alert title="Unable to check sign-in" tone="error">
+            Refresh the page to try again.
+          </Alert>
+        ) : null}
         {error ? (
           <Alert title="Sign-in failed" tone="error">
             {error}

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { EmployeeOverviewScreen } from "@/features/employee/components/employee-overview-screen";
+import { EmployeeOverviewScreen } from "@/features/employee/employee-overview-screen";
 
 export const metadata: Metadata = {
   title: "Employee overview",

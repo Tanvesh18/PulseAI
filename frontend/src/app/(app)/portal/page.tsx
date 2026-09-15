@@ -1,4 +1,4 @@
-import { PortalScreen } from "@/features/portal/portal-screen";
+import { redirect } from "next/navigation";
 export default function Page() {
-  return <PortalScreen section="overview" />;
+  redirect("/dashboard");
 }

@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "node:crypto";
-import type { Prisma, User } from "../generated/prisma/client";
+import type { Prisma, User } from "../../generated/prisma/client";
 import { PrismaService } from "../data/prisma.service";
 import type { RequestActor } from "../auth/request-actor";
 import type { MasterData, MonthlyRow, PortalRole } from "./portal.types";

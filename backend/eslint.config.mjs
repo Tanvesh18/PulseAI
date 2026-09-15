@@ -10,7 +10,7 @@ export default tseslint.config(
   prettier,
   {
     languageOptions: {
-      globals: { ...globals.node, ...globals.jest },
+      globals: globals.node,
       parserOptions: {
         projectService: true,
         tsconfigRootDir: import.meta.dirname,

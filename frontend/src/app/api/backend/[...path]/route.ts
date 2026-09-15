@@ -1,4 +1,5 @@
 import { env } from "@/config/env";
+import { isWorkspaceEnabled } from "@/config/workspace-focus";
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
@@ -7,6 +8,11 @@ async function proxy(
   context: RouteContext,
 ): Promise<Response> {
   const { path } = await context.params;
+  if (path[0] === "employee" && !isWorkspaceEnabled("EMPLOYEE"))
+    return Response.json(
+      { message: "Employee workspace is locked for now." },
+      { status: 403 },
+    );
   const target = new URL(`/api/v1/${path.join("/")}`, env.BACKEND_API_URL);
   target.search = new URL(request.url).search;
 
@@ -33,6 +39,11 @@ async function proxy(
       .map((part) => part.trim())
       .find((part) => part.startsWith("pulse_demo_role="))
       ?.split("=")[1];
+    if (role && !isWorkspaceEnabled(role))
+      return Response.json(
+        { message: "This role is locked. Sign in as Director." },
+        { status: 403 },
+      );
     if (role && ["MANAGER", "FINANCE", "HR", "DIRECTOR"].includes(role))
       headers.set("x-dev-role", role);
   }

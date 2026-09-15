@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ForbiddenException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -18,6 +19,9 @@ export class EmployeeAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const focusRole = this.config.get<string>("WORKSPACE_FOCUS_ROLE");
+    if (focusRole && focusRole !== "EMPLOYEE")
+      throw new ForbiddenException("Employee workspace is locked for now.");
     const request = context.switchToHttp().getRequest<Request>();
     const subject = await this.resolveSubject(request);
     const user = await this.data.user.findUnique({ where: { oidcSubject: subject } });

@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import type { RequestActor } from "../auth/request-actor";
 import { EmployeeRepository } from "../data/employee.repository";
-import type { UpdateTimesheetDto } from "./dto/update-timesheet.dto";
+import type { UpdateTimesheetDto } from "./update-timesheet.dto";
 import { EmployeeWorkflow } from "./employee.workflow";
 
 @Injectable()

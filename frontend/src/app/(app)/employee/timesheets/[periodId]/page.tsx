@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { HistoricalTimesheetScreen } from "@/features/employee/components/historical-timesheet-screen";
+import { HistoricalTimesheetScreen } from "@/features/employee/historical-timesheet-screen";
 
 export const metadata: Metadata = { title: "Timesheet detail" };
 

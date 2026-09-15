@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CurrentTimesheetScreen } from "@/features/employee/components/current-timesheet-screen";
+import { CurrentTimesheetScreen } from "@/features/employee/current-timesheet-screen";
 
 export const metadata: Metadata = {
   title: "My timesheet",

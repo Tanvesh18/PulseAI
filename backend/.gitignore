@@ -1,9 +1,5 @@
 node_modules/
 dist/
-coverage/
 .env
 generated/
 /data/
-src/generated/
-.env.portal-test
-.env.portal-test

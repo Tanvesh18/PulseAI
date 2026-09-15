@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PrismaClient } from "../src/generated/prisma/client";
+import type { PrismaClient } from "../generated/prisma/client";
 import { staticIds } from "../src/data/demo-data";
 import { employeeRows } from "../src/portal/portal.rules";
 import type {

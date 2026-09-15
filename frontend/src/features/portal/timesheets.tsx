@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { PageHeader } from "@/features/employee/components/page-header";
+import { PageHeader } from "@/components/layout/page-header";
 import { api, download } from "./api";
 import { usePortal } from "./portal-shell";
 import { DataState, MonthFilter, Status, useData } from "./common";
@@ -503,6 +503,7 @@ export function Approvals() {
   } | null>(null);
   const [reason, setReason] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
+  const approved = sheets?.filter((sheet) => sheet.status === "APPROVED") ?? [];
   const pending =
     sheets?.filter((s) => ["SUBMITTED", "RESUBMITTED"].includes(s.status)) ??
     [];
@@ -513,7 +514,10 @@ export function Approvals() {
         description="Review submitted timesheets, then approve or return them with a reason."
         action={
           session.role === "FINANCE" && (
-            <Button disabled={busy} onClick={() => setExportOpen(true)}>
+            <Button
+              disabled={busy || approved.length === 0}
+              onClick={() => setExportOpen(true)}
+            >
               Export approved hours
             </Button>
           )
@@ -522,6 +526,20 @@ export function Approvals() {
       <MonthFilter />
       <DataState error={error} loading={!sheets} />
       <p>{pending.length} timesheets awaiting review</p>
+      {session.role === "FINANCE" && sheets && (
+        <section className={styles.panel}>
+          <h2>Export summary</h2>
+          <p>
+            {approved.length} approved timesheets for {period}. Review the
+            summary before downloading an Excel staging workbook.
+          </p>
+          {approved.length === 0 && (
+            <p className={styles.muted}>
+              Approve a submitted timesheet to enable export.
+            </p>
+          )}
+        </section>
+      )}
       <div className={styles.table}>
         <table>
           <thead>
@@ -601,7 +619,7 @@ export function Approvals() {
             <>
               <SheetEditor sheet={review} masters={[]} review />
               {session.role === "FINANCE" && (
-                <Link href={"/portal/timesheets" as Route}>
+                <Link href={"/timesheets" as Route}>
                   Open team timesheets to make a Finance correction
                 </Link>
               )}
@@ -672,6 +690,40 @@ export function Approvals() {
               non-back-charging cost centers are excluded. Billing and FX rates
               must be configured.
             </p>
+            <div className={styles.table}>
+              <table>
+                <caption>
+                  Approved timesheets for {period}, before export exclusions
+                </caption>
+                <thead>
+                  <tr>
+                    <th>Business group</th>
+                    <th>Cost center</th>
+                    <th>Employees</th>
+                    <th>Recorded hours</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approved.map((sheet) => (
+                    <tr key={sheet.id}>
+                      <td>{sheet.businessGroup}</td>
+                      <td>{sheet.costCenter}</td>
+                      <td>
+                        {
+                          new Set(sheet.rows.map((row) => row.employeeCode))
+                            .size
+                        }
+                      </td>
+                      <td>
+                        {sheet.rows
+                          .reduce((sum, row) => sum + row.hours, 0)
+                          .toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <Alert title="Oracle integration">
               This is a staging workbook. An approved Web ADI template and
               Oracle credentials are needed for direct upload.

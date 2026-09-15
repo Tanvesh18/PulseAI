@@ -10,7 +10,7 @@ import {
   type EmployeeData,
   type EmployeeTimesheet,
 } from "../data/employee-data";
-import type { UpdateTimesheetDto } from "./dto/update-timesheet.dto";
+import type { UpdateTimesheetDto } from "./update-timesheet.dto";
 
 export class EmployeeWorkflow {
   constructor(private readonly data: EmployeeData) {}

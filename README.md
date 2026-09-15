@@ -21,7 +21,7 @@ The team workspace at `/portal` implements the HTML mockup's manager, Finance, H
 - [Authentication](#authentication)
 - [Validation and concurrency](#validation-and-concurrency)
 - [Development commands](#development-commands)
-- [Testing and quality](#testing-and-quality)
+- [Quality checks](#quality-checks)
 - [Design system and accessibility](#design-system-and-accessibility)
 - [Known limitations](#known-limitations)
 - [Planned direction](#planned-direction)
@@ -60,7 +60,6 @@ The current Employee experience includes:
 - Backend ownership checks that restrict Employee endpoints to the authenticated employee's records.
 - Request validation for assignments, dates, hour limits, duplicate assignments, and payload shape.
 - Optimistic version checks that prevent one session from silently overwriting another.
-- Unit, component, accessibility, environment, and design-token tests.
 
 ## Technology stack
 
@@ -73,7 +72,6 @@ The current Employee experience includes:
 - Radix UI primitives for accessible dialogs and tooltips
 - Lucide icons
 - Zod for environment validation
-- Vitest, Testing Library, and jest-axe for tests
 
 ### Backend
 
@@ -82,7 +80,6 @@ The current Employee experience includes:
 - `class-validator` and `class-transformer` for DTO validation
 - `jose` for OIDC/JWT verification through a remote JWKS
 - Helmet for security headers
-- Jest for unit tests
 - PostgreSQL with Prisma, versioned migrations, and an explicit demo seed
 
 ### Planned platform components
@@ -126,7 +123,6 @@ PulseAI_Emerson/
 |   |   |-- config/          # Typed environment boundary
 |   |   |-- features/        # Employee feature and API client
 |   |   |-- styles/          # Authoritative CSS design tokens
-|   |   `-- test/            # Shared test setup
 |   |-- .env.example
 |   |-- package.json
 |-- PRODUCT.md               # Product definition and principles
@@ -324,11 +320,9 @@ Commands are run inside the relevant application directory.
 | `npm run start`        | Serve a previously built application      |
 | `npm run typecheck`    | Type-check without emitting files         |
 | `npm run lint`         | Run ESLint with zero warnings allowed     |
-| `npm run test`         | Run Vitest once                           |
-| `npm run test:watch`   | Run Vitest in watch mode                  |
 | `npm run format`       | Format supported files with Prettier      |
 | `npm run format:check` | Check formatting without changing files   |
-| `npm run check`        | Run formatting, types, linting, and tests |
+| `npm run check`        | Run formatting, types, and linting        |
 
 ### Backend
 
@@ -339,10 +333,9 @@ Commands are run inside the relevant application directory.
 | `npm run build`     | Compile the NestJS application           |
 | `npm run typecheck` | Type-check without emitting files        |
 | `npm run lint`      | Run ESLint with zero warnings allowed    |
-| `npm run test`      | Run Jest serially                        |
-| `npm run check`     | Run types, linting, tests, and the build |
+| `npm run check`     | Run types, linting, and the build        |
 
-## Testing and quality
+## Quality checks
 
 Before opening a pull request, run both application check suites:
 
@@ -355,9 +348,7 @@ npm run check
 npm run build
 ```
 
-The frontend `check` script does not include the production build, so `npm run build` is listed separately. Existing coverage exercises the app shell, employee views, current-timesheet behavior, API payloads, environment parsing, accessibility smoke checks, design-token ownership and contrast, backend authentication, employee scoping, and in-memory updates.
-
-Tests are colocated with the source they verify using `*.test.ts`, `*.test.tsx`, and `*.spec.ts` filenames.
+The frontend `check` script does not include the production build, so `npm run build` is listed separately.
 
 ## Design system and accessibility
 
@@ -410,13 +401,13 @@ AI is intended to supplement deterministic controls. It must not approve timeshe
 
 ## Contributing
 
-Keep changes aligned with `PRODUCT.md` and `design.md`, preserve backend authorization boundaries, and avoid presenting planned capabilities as implemented. Add or update tests with behavior changes and run the relevant check suite before submitting work.
+Keep changes aligned with `PRODUCT.md` and `design.md`, preserve backend authorization boundaries, and avoid presenting planned capabilities as implemented. Run the relevant quality checks before submitting work.
 
 This repository does not currently declare a license. Treat the source as private unless the project owner adds one.
 
 ### Database validation
 
-`cd backend; npm run check` runs type checking, lint, unit tests, and a build. To run real PostgreSQL persistence and concurrency tests, configure `TEST_DATABASE_URL` to a separate migrated test database, then run `npm run test:integration`. These tests create and clean up only their own employee records. They do not use `DATABASE_URL`.
+`cd backend; npm run check` runs type checking, linting, and a build.
 
 Workflow requests load fresh employee-scoped records inside a database transaction. A PostgreSQL row lock serializes operations for the same employee across API processes; timesheet changes, revisions, notifications, and audit events commit together. Stale versions still return HTTP 409. No process-wide mutable data cache is used.
 

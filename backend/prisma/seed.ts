@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { seedPortal } from "./seed-portal";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../src/generated/prisma/client";
+import { PrismaClient } from "../generated/prisma/client";
 import { DemoData } from "../src/data/demo-data";
 
 if (process.env.NODE_ENV === "production") {

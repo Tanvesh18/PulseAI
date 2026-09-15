@@ -1,5 +1,9 @@
 # Mockup feature coverage
 
+## Current workspace focus
+
+Only Director is open for current development. The root URL shows role selection. Director is available through Continue as Director; Manager, Finance, and HR display lock icons and Under maintenance. No automatic role sign-in runs on page load. The Director overview is at `/dashboard`. Sections use `/approvals`, `/reports`, `/timesheets`, `/notifications`, and `/audit`; old `/portal` URLs redirect. Other roles and Employee routes remain locked. Frontend availability is controlled by `frontend/src/config/workspace-focus.ts`; backend access is restricted by `WORKSPACE_FOCUS_ROLE=DIRECTOR` in `backend/.env`. Role implementations and stored accounts are retained. Reopening the other workspaces later also requires restoring their navigation and entry flow.
+
 The reference `timesheet-demo.html` is unchanged. The existing employee pages, typography, colors, controls, and shell styles remain the visual authority.
 
 Open `/portal` or select **Team workspace** in the employee sidebar. Locally, choose Manager, Finance, HR, or Director. Demo role selection is disabled in production; production uses the existing OIDC integration and database role assignments.
@@ -20,6 +24,12 @@ Open `/portal` or select **Team workspace** in the employee sidebar. Locally, ch
 
 ## Boundaries and assumptions
 
+### Desktop comparison with the running HTML demo
+
+The demo at `http://127.0.0.1:5500/timesheet-demo.html` was inspected through Playwright. The existing persisted workflows cover its timesheet entry, shared resources, approval/return, five report types, master data, access management, and HR workbook import actions. Added gaps include name/email search with empty results, recent dashboard notifications and mark-as-read actions, month-range controls across report types, and a Finance export summary with approved-sheet details before exclusions. Export is disabled until at least one sheet is approved.
+
+The demo's fixed notification counts, completion markers, deadline countdown, and illustrative employee totals are not live operational facts. Pulse AI uses stored records where available; deadline configuration and explicit completion tracking for the early workflow stages are not implemented. External email and direct Oracle upload remain outside the configured integration scope described below. Mobile work is deferred.
+
 - The mockup has inconsistent illustrative dates. A billing month defaults to the previous month's 23rd through the current month's 22nd and 167 hours. Finance can configure these values. Proration uses active weekdays; an organization-specific holiday/payroll policy has not been supplied.
 - Demo rates and FX values are illustrative, not current market rates or approved payroll rules.
 - Oracle output is a **staging workbook**. Web ADI compatibility and direct upload require the real Oracle template, endpoint and credentials. No external Oracle transmission is performed.
@@ -31,4 +41,3 @@ Open `/portal` or select **Team workspace** in the employee sidebar. Locally, ch
 
 Run `npm.cmd run check` in both backend and frontend; `npm.cmd run build` in frontend verifies production compilation.
 
-Run `npm.cmd run test:portal` in backend with `TEST_DATABASE_URL` or the Git-ignored `.env.portal-test` set to an isolated migrated database branch. Tests create and remove only their own organization records.

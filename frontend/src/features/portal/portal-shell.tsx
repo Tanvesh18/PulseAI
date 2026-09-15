@@ -27,11 +27,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import { PageHeader } from "@/features/employee/components/page-header";
 import { api } from "./api";
-import type { Session, Role } from "./types";
+import type { Session } from "./types";
+import { roleSections, type PortalSection } from "@/features/roles/sections";
 import shell from "@/components/shell/app-shell.module.css";
 import styles from "./portal.module.css";
+import { isWorkspaceEnabled } from "@/config/workspace-focus";
 
 type Context = {
   session: Session;
@@ -106,77 +107,9 @@ export const navItems = [
     roles: ["MANAGER", "FINANCE", "HR", "DIRECTOR"],
   },
 ];
-function SignIn({ signedIn }: { signedIn: (session: Session) => void }) {
-  const [role, setRole] = useState<Role>("MANAGER");
-  const [enabled, setEnabled] = useState(false);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    void fetch("/api/demo-session")
-      .then((r) => r.json())
-      .then((r: { enabled: boolean }) => setEnabled(r.enabled));
-  }, []);
-  async function signIn() {
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch("/api/demo-session", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
-      if (!response.ok) throw new Error("Demo sign-in is unavailable.");
-      signedIn(await api<Session>("session"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign-in failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className={`${styles.panel} ${styles.login}`}>
-      <PageHeader
-        title="Team workspace"
-        description="Choose a demo role to explore the timesheet workflow."
-      />
-      {enabled ? (
-        <>
-          <label className={styles.field}>
-            Sign in as
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-            >
-              <option value="MANAGER">Manager ? update and submit</option>
-              <option value="FINANCE">
-                Finance ? administration and exports
-              </option>
-              <option value="HR">HR ? employee imports</option>
-              <option value="DIRECTOR">Director ? review and approve</option>
-            </select>
-          </label>
-          <Button disabled={busy} onClick={() => void signIn()}>
-            {busy ? "Signing in?" : "Sign in to demo"}
-          </Button>
-          <p className={styles.muted}>
-            Demo accounts and reference rates. All changes are saved to
-            PostgreSQL.
-          </p>
-        </>
-      ) : (
-        <p>
-          Sign in through your organization?s identity provider to access this
-          workspace. Demo role selection is unavailable in production.
-        </p>
-      )}
-      {error && (
-        <Alert title="Sign-in failed" tone="error">
-          {error}
-        </Alert>
-      )}
-      <Link href="/employee">Back to employee workspace</Link>
-    </div>
-  );
+
+function sectionForPath(path: string): PortalSection {
+  return (path ? path.slice(1) : "overview") as PortalSection;
 }
 export function PortalShell({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -191,9 +124,26 @@ export function PortalShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   useEffect(() => {
-    void api<Session>("session")
-      .then(setSession)
-      .catch(() => setSession(null));
+    let active = true;
+    async function connect() {
+      try {
+        const next = await api<Session>("session");
+        if (active) setSession(next);
+      } catch (reason) {
+        if (active) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not connect to the workspace.",
+          );
+          setSession(null);
+        }
+      }
+    }
+    void connect();
+    return () => {
+      active = false;
+    };
   }, []);
   const execute = useCallback(
     async (action: () => Promise<unknown>, success = "Changes saved.") => {
@@ -219,15 +169,19 @@ export function PortalShell({ children }: { children: ReactNode }) {
       <p className={shell.navigationLabel}>Workspace</p>
       <ul>
         {navItems
-          .filter((item) => session && item.roles.includes(session.role))
+          .filter(
+            (item) =>
+              session &&
+              roleSections[session.role].includes(sectionForPath(item.path)),
+          )
           .map((item) => (
             <li key={item.path}>
               <Link
                 onClick={() => setOpen(false)}
-                href={`/portal${item.path}` as Route}
-                className={`${shell.navigationLink} ${pathname === `/portal${item.path}` ? shell.navigationLinkActive : ""}`}
+                href={(item.path || "/dashboard") as Route}
+                className={`${shell.navigationLink} ${pathname === (item.path || "/dashboard") ? shell.navigationLinkActive : ""}`}
                 aria-current={
-                  pathname === `/portal${item.path}` ? "page" : undefined
+                  pathname === (item.path || "/dashboard") ? "page" : undefined
                 }
               >
                 <item.icon size={20} aria-hidden="true" />
@@ -235,17 +189,19 @@ export function PortalShell({ children }: { children: ReactNode }) {
               </Link>
             </li>
           ))}
-        <li>
-          <Link className={shell.navigationLink} href="/employee">
-            <CalendarDays size={20} aria-hidden="true" />
-            Employee workspace
-          </Link>
-        </li>
+        {isWorkspaceEnabled("EMPLOYEE") && (
+          <li>
+            <Link className={shell.navigationLink} href="/employee">
+              <CalendarDays size={20} aria-hidden="true" />
+              Employee workspace
+            </Link>
+          </li>
+        )}
       </ul>
     </nav>
   );
   const identity = (
-    <Link href={"/portal" as Route} className={shell.productIdentity}>
+    <Link href={"/dashboard" as Route} className={shell.productIdentity}>
       <span className={shell.productMark}>
         <Activity size={22} aria-hidden="true" />
       </span>
@@ -267,7 +223,9 @@ export function PortalShell({ children }: { children: ReactNode }) {
       </span>
     </div>
   );
-  const current = navItems.find((item) => `/portal${item.path}` === pathname);
+  const current = navItems.find(
+    (item) => (item.path || "/dashboard") === pathname,
+  );
   return (
     <div className={shell.shell}>
       <aside className={shell.sidebar}>
@@ -312,7 +270,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
                   void execute(async () => {
                     await fetch("/api/demo-session", { method: "DELETE" });
                     setSession(null);
-                    router.push("/portal" as Route);
+                    router.push("/" as Route);
                   }, "Signed out.")
                 }
               >
@@ -323,16 +281,28 @@ export function PortalShell({ children }: { children: ReactNode }) {
             {profile}
           </div>
         </header>
-        <main className={shell.content} id="main-content">
+        <main
+          className={`${shell.content} ${styles.portalContent}`}
+          id="main-content"
+        >
           {session === undefined ? (
-            <p role="status">Connecting to your workspace?</p>
+            <p role="status">Opening Director workspace…</p>
           ) : session === null ? (
-            <SignIn
-              signedIn={(next) => {
-                setSession(next);
-                router.push("/portal" as Route);
-              }}
-            />
+            <Alert
+              title="Could not open the workspace"
+              tone="error"
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => window.location.reload()}
+                >
+                  Retry
+                </Button>
+              }
+            >
+              {error}
+              <Link href="/">Choose a role</Link>
+            </Alert>
           ) : (
             <PortalContext.Provider
               value={{ session, period, setPeriod, refresh, busy, execute }}

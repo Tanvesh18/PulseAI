@@ -50,10 +50,6 @@ An unavailable database causes backend startup to fail; there is no JSON storage
 After startup, open `http://localhost:4000/api/v1/employee/me` to verify the seeded development account.
 Save a timesheet through the frontend, restart the backend, and check that the saved hours remain.
 
-For automated database checks, use a separate Neon test database. Apply migrations to that test database using a temporary `DIRECT_URL` override, then set `TEST_DATABASE_URL` to its connection URL and run `npm.cmd run test:integration`.
-Restore any migration override before working with the development database again.
-The integration suite checks persistence across clients, concurrent updates, transactional rollback, and notification reads.
-
 ## References
 
 - [Neon account setup](https://neon.com/docs/get-started-with-neon/signing-up)

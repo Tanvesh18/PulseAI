@@ -10,9 +10,9 @@ import {
 } from "@nestjs/common";
 import type { Request } from "express";
 import { EmployeeAuthGuard } from "../auth/employee-auth.guard";
-import { SubmitTimesheetDto } from "./dto/submit-timesheet.dto";
-import { UpdateTimesheetDto } from "./dto/update-timesheet.dto";
-import { AskAssistantDto } from "./dto/ask-assistant.dto";
+import { SubmitTimesheetDto } from "./submit-timesheet.dto";
+import { UpdateTimesheetDto } from "./update-timesheet.dto";
+import { AskAssistantDto } from "./ask-assistant.dto";
 import { EmployeeService } from "./employee.service";
 
 @Controller("employee")

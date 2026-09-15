@@ -2,6 +2,50 @@
   display: grid;
   gap: var(--spacing-xl);
 }
+.dashboardNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  padding-block: var(--spacing-md);
+  border-top: var(--border-width-default) solid var(--color-border);
+}
+.dashboardNotice h3 {
+  font-size: var(--font-size-body-md);
+  margin-bottom: var(--spacing-xxs);
+}
+.dashboardNotice p {
+  margin-bottom: var(--spacing-xs);
+}
+.unreadLabel {
+  margin-inline-start: var(--spacing-sm);
+  color: var(--color-primary);
+  font-size: var(--font-size-caption);
+}
+main.portalContent {
+  padding-bottom: var(--spacing-xl);
+}
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(
+    100svh - var(--layout-header-height) - var(--spacing-xl) * 2
+  );
+}
+.dashboard > .table {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+@media (min-width: 1024px) {
+  .dashboard {
+    min-height: calc(
+      100svh - var(--layout-header-height) - var(--spacing-xxl) -
+        var(--spacing-xl)
+    );
+  }
+}
 .toolbar {
   display: flex;
   align-items: end;
@@ -135,13 +179,108 @@
   gap: var(--spacing-sm);
 }
 .flow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-  padding-inline-start: var(--spacing-xl);
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  list-style: none;
+  padding: var(--spacing-md) 0;
 }
 .flow li {
-  padding: var(--spacing-xs);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding-inline: var(--spacing-xxs);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+.flow li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: var(--spacing-md);
+  inset-inline-start: calc(50% + var(--spacing-lg));
+  width: calc(100% - var(--spacing-xxxl));
+  height: var(--border-width-default);
+  background: var(--color-border-strong);
+}
+.flow li.flowComplete {
+  color: var(--color-success-strong);
+}
+.flow li.flowComplete:not(:last-child)::after {
+  background: var(--color-success-border);
+}
+.flowNumber {
+  display: grid;
+  place-items: center;
+  width: var(--spacing-xxl);
+  height: var(--spacing-xxl);
+  flex-shrink: 0;
+  border: var(--border-width-default) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-subtle);
+  font-weight: var(--font-weight-body-emphasis);
+  font-variant-numeric: tabular-nums;
+}
+.flowLabel {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-body-emphasis);
+}
+.flowLabel small {
+  display: block;
+  margin-top: var(--spacing-xxs);
+  color: var(--color-primary);
+  font-size: inherit;
+  font-weight: normal;
+}
+.flowComplete .flowNumber {
+  border-color: var(--color-success);
+  background: var(--color-success-soft);
+  color: var(--color-success-strong);
+}
+.flowStatus {
+  color: var(--color-success-strong) !important;
+}
+.flowResponsibility .flowNumber {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-color: var(--color-primary);
+}
+.cycleHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+.cycleDates {
+  margin-top: var(--spacing-xs);
+  color: var(--color-text-secondary);
+}
+.cycleHours {
+  display: grid;
+  gap: var(--spacing-xxs);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+.cycleHours span {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.cycleMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-lg);
+  border-top: var(--border-width-default) solid var(--color-border);
+  padding-top: var(--spacing-lg);
+}
+.cycleMetrics dt {
+  color: var(--color-text-secondary);
+}
+.cycleMetrics dd {
+  margin-top: var(--spacing-xxs);
+  font-size: var(--font-size-heading-lg);
+  font-weight: var(--font-weight-body-emphasis);
+  font-variant-numeric: tabular-nums;
 }
 .empty {
   padding: var(--spacing-xl);
@@ -214,6 +353,12 @@
   background: var(--color-primary-soft);
   box-shadow: inset 3px 0 var(--color-primary);
 }
+.roleCard:disabled {
+  cursor: not-allowed;
+  background: var(--color-surface-disabled);
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
 
 .roleIcon {
   display: grid;
@@ -250,6 +395,27 @@
   font-size: var(--font-size-caption);
 }
 @media (max-width: 640px) {
+  .cycleHours {
+    text-align: start;
+  }
+  .cycleMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .flow {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-lg);
+  }
+  .flow li {
+    flex-direction: row;
+    text-align: start;
+    padding-inline: 0;
+  }
+  .flow li:not(:last-child)::after {
+    top: calc(var(--spacing-xxl) + var(--spacing-xxs));
+    inset-inline-start: var(--spacing-md);
+    width: var(--border-width-default);
+    height: calc(100% - var(--spacing-md));
+  }
   .toolbar > *,
   .toolbar > button {
     flex: 1 1 100%;

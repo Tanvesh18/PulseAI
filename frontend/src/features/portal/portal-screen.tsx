@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { PageHeader } from "@/features/employee/components/page-header";
+import { PageHeader } from "@/components/layout/page-header";
 import { api, download, fileBody } from "./api";
 import { usePortal } from "./portal-shell";
 import { DataState, MonthFilter, ReportTable, Status, useData } from "./common";
@@ -22,15 +22,66 @@ import type {
 } from "./types";
 import styles from "./portal.module.css";
 
+const billingSteps = [
+  { label: "Cycle initiated", role: "FINANCE" },
+  { label: "HR data uploaded", role: "HR" },
+  { label: "Travel updated", role: "HR" },
+  { label: "Timesheet entry", role: "MANAGER" },
+  { label: "Manager submit", role: "MANAGER" },
+  { label: "Director approval", role: "DIRECTOR" },
+  { label: "Finance export", role: "FINANCE" },
+];
+
+type BillingWorkflowState = "complete" | "active" | "upcoming";
+
+function getBillingWorkflowStates(
+  sheets: Overview["sheets"],
+): BillingWorkflowState[] {
+  const allSheetsMatch = (
+    predicate: (sheet: Overview["sheets"][number]) => boolean,
+  ) => sheets.length > 0 && sheets.every(predicate);
+  const activeStepIndex = allSheetsMatch((sheet) => Boolean(sheet.exportedAt))
+    ? billingSteps.length
+    : allSheetsMatch((sheet) => sheet.status === "APPROVED")
+      ? 6
+      : allSheetsMatch((sheet) =>
+            ["SUBMITTED", "RESUBMITTED", "APPROVED"].includes(sheet.status),
+          )
+        ? 5
+        : sheets.length > 0
+          ? 4
+          : 0;
+
+  return billingSteps.map((_, index) =>
+    index < activeStepIndex
+      ? "complete"
+      : index === activeStepIndex
+        ? "active"
+        : "upcoming",
+  );
+}
+
+function cycleDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${value}T00:00:00Z`));
+}
+
 function Dashboard() {
   const { period, session, busy, execute } = usePortal();
   const { data, error } = useData<Overview>(`overview?period=${period}`);
+  const { data: notices, error: noticeError } =
+    useData<Notice[]>("notifications");
   const submitted =
     data?.sheets.filter((s) =>
       ["SUBMITTED", "RESUBMITTED", "APPROVED"].includes(s.status),
     ).length ?? 0;
+  const billingWorkflowStates = getBillingWorkflowStates(data?.sheets ?? []);
   return (
-    <div className={styles.stack}>
+    <div className={`${styles.stack} ${styles.dashboard}`}>
       <PageHeader
         title="Overview"
         description={`Welcome, ${session.name}. Track the monthly billing workflow in your scope.`}
@@ -67,26 +118,64 @@ function Dashboard() {
       <DataState error={error} loading={!data} />
       {data && (
         <>
-          <section className={styles.panel}>
-            <h2>Billing cycle workflow</h2>
-            <p>
-              {data.cycle.start} ? {data.cycle.end} ? {data.cycle.standardHours}{" "}
-              configured standard hours
-            </p>
-            <ol className={styles.flow}>
-              {[
-                "Cycle initiated",
-                "HR data uploaded",
-                "Travel updated",
-                "Timesheet entry",
-                "Manager submit",
-                "Director approval",
-                "Finance export",
-              ].map((step) => (
-                <li key={step}>{step}</li>
-              ))}
+          <section
+            className={styles.panel}
+            aria-labelledby="billing-cycle-title"
+          >
+            <div className={styles.cycleHeader}>
+              <div>
+                <h2 id="billing-cycle-title">Billing cycle workflow</h2>
+                <p className={styles.cycleDates}>
+                  <time dateTime={data.cycle.start}>
+                    {cycleDate(data.cycle.start)}
+                  </time>
+                  <span> to </span>
+                  <time dateTime={data.cycle.end}>
+                    {cycleDate(data.cycle.end)}
+                  </time>
+                </p>
+              </div>
+              <p className={styles.cycleHours}>
+                <strong>{data.cycle.standardHours} hours</strong>
+                <span>Configured standard</span>
+              </p>
+            </div>
+            <ol className={styles.flow} aria-label="Billing workflow sequence">
+              {billingSteps.map((step, index) => {
+                const state = billingWorkflowStates[index];
+                const isComplete = state === "complete";
+                const isActive = state === "active";
+                return (
+                  <li
+                    key={step.label}
+                    className={[
+                      isComplete ? styles.flowComplete : undefined,
+                      isActive ? styles.flowResponsibility : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <span className={styles.flowNumber} aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    <span className={styles.flowLabel}>
+                      {step.label}
+                      {isComplete && (
+                        <small className={styles.flowStatus}>Complete</small>
+                      )}
+                      {isActive && (
+                        <small>
+                          {step.role === session.role
+                            ? "Your responsibility"
+                            : "Current step"}
+                        </small>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
             </ol>
-            <dl className={styles.metrics}>
+            <dl className={styles.cycleMetrics}>
               <div>
                 <dt>Employees in scope</dt>
                 <dd>{data.employees}</dd>
@@ -107,8 +196,9 @@ function Dashboard() {
           </section>
           {data.shortHours > 0 && (
             <Alert title="Remarks needed" tone="warning">
-              {data.shortHours} rows are below their expected hours. Managers
-              must explain short hours before submission.
+              {data.shortHours} {data.shortHours === 1 ? "row is" : "rows are"}{" "}
+              below their expected hours. Managers must explain short hours
+              before submission.
             </Alert>
           )}
           <div className={styles.table}>
@@ -144,10 +234,10 @@ function Dashboard() {
                       <Link
                         href={
                           (session.role === "HR"
-                            ? "/portal/imports"
+                            ? "/imports"
                             : session.role === "DIRECTOR"
-                              ? "/portal/approvals"
-                              : "/portal/timesheets") as Route
+                              ? "/approvals"
+                              : "/timesheets") as Route
                         }
                       >
                         Open workspace
@@ -164,6 +254,65 @@ function Dashboard() {
               </p>
             )}
           </div>
+          <section
+            className={styles.panel}
+            aria-labelledby="dashboard-notifications"
+          >
+            <div className={styles.cycleHeader}>
+              <h2 id="dashboard-notifications">Alerts &amp; notifications</h2>
+              <Link href="/notifications">View all notifications</Link>
+            </div>
+            <DataState error={noticeError} loading={!notices} />
+            {notices?.slice(0, 3).map((notice) => (
+              <article key={notice.id} className={styles.dashboardNotice}>
+                <div>
+                  <h3>
+                    {notice.title}
+                    {!notice.read && (
+                      <span className={styles.unreadLabel}>Unread</span>
+                    )}
+                  </h3>
+                  <p>{notice.message}</p>
+                  <time dateTime={notice.createdAt} className={styles.muted}>
+                    {new Date(notice.createdAt).toLocaleString()}
+                  </time>
+                </div>
+                {!notice.read && (
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    disabled={busy}
+                    onClick={() =>
+                      void execute(
+                        () => api(`notifications/${notice.id}`, {}, "PATCH"),
+                        "Notification marked as read.",
+                      )
+                    }
+                  >
+                    Mark as read
+                  </Button>
+                )}
+              </article>
+            ))}
+            {notices?.length === 0 && (
+              <p className={styles.muted}>No notifications yet.</p>
+            )}
+            <Link
+              href={
+                session.role === "HR"
+                  ? "/imports"
+                  : session.role === "DIRECTOR"
+                    ? "/approvals"
+                    : "/timesheets"
+              }
+            >
+              {session.role === "HR"
+                ? "Open HR uploads"
+                : session.role === "DIRECTOR"
+                  ? "Open approval queue"
+                  : "Open team timesheets"}
+            </Link>
+          </section>
           {["FINANCE", "HR"].includes(session.role) && (
             <section className={styles.panel}>
               <h2>Recent HR imports</h2>
@@ -180,9 +329,7 @@ function Dashboard() {
                   sample records are available for demonstration.
                 </p>
               )}
-              <Link href={"/portal/imports" as Route}>
-                Upload employee data
-              </Link>
+              <Link href={"/imports" as Route}>Upload employee data</Link>
             </section>
           )}
         </>
@@ -245,7 +392,17 @@ function Reports() {
       </div>
       <div className={styles.panel}>
         <div className={styles.toolbar}>
-          <MonthFilter />
+          {kind !== "parameters" &&
+            ["from", "to"].map((key) => (
+              <label className={styles.field} key={key}>
+                {key === "from" ? "From month" : "To month"}
+                <input
+                  type="month"
+                  value={filters[key] ?? period}
+                  onChange={(event) => change(key, event.target.value)}
+                />
+              </label>
+            ))}
           {select(
             "businessGroup",
             "Business group",
@@ -704,6 +861,12 @@ function UserAccess() {
   const { session, busy, execute } = usePortal();
   const [grant, setGrant] = useState(false);
   const [target, setTarget] = useState<Access | null>(null);
+  const [search, setSearch] = useState("");
+  const filteredUsers = users?.filter((user) =>
+    `${user.displayName} ${user.email}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase()),
+  );
   return (
     <div className={styles.stack}>
       <PageHeader
@@ -712,6 +875,20 @@ function UserAccess() {
         action={<Button onClick={() => setGrant(true)}>Grant access</Button>}
       />
       <DataState error={error} loading={!users} />
+      <label className={styles.field}>
+        Search by name or email
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Enter a name or email"
+        />
+      </label>
+      {users && (
+        <p className={styles.muted} role="status">
+          {filteredUsers?.length} of {users.length} users
+        </p>
+      )}
       <div className={styles.table}>
         <table>
           <thead>
@@ -725,7 +902,7 @@ function UserAccess() {
             </tr>
           </thead>
           <tbody>
-            {users?.map((user) => (
+            {filteredUsers?.map((user) => (
               <tr key={user.id}>
                 <td>{user.displayName}</td>
                 <td>{user.email}</td>
@@ -746,6 +923,9 @@ function UserAccess() {
             ))}
           </tbody>
         </table>
+        {filteredUsers?.length === 0 && (
+          <p className={styles.empty}>No users match your search.</p>
+        )}
       </div>
       <Dialog open={grant} onOpenChange={setGrant}>
         <DialogContent
@@ -977,7 +1157,7 @@ export function PortalScreen({ section }: { section: string }) {
     default:
       return (
         <Alert title="Page not found">
-          <Link href={"/portal" as Route}>Return to overview</Link>
+          <Link href={"/" as Route}>Return to overview</Link>
         </Alert>
       );
   }
