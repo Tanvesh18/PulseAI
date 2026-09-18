@@ -83,7 +83,7 @@ export function LandingSignIn() {
         message?: string;
       } | null;
       if (!response.ok) throw new Error(payload?.message ?? "Sign-in failed.");
-      router.push("/dashboard");
+      router.push(`/login?role=${selectedRole}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Sign-in failed.");
     } finally {
@@ -99,7 +99,7 @@ export function LandingSignIn() {
       <div className={styles.landingPanel}>
         <PageHeader
           title="Timesheet Automation Portal"
-          description="Choose your role. Only Director is available right now."
+          description="Choose your role, then sign in with your organization account. Only Director is available right now."
         />
         <div
           className={styles.roleGrid}
@@ -139,15 +139,17 @@ export function LandingSignIn() {
           onClick={() => void signIn()}
         >
           {busy
-            ? "Signing in..."
+            ? "Continuing..."
             : sessionStatus === "loading"
               ? "Checking sign-in..."
               : sessionStatus === "demo"
-                ? "Continue as Director"
+                ? "Continue to sign in"
                 : "Organization sign-in required"}
         </Button>
         {sessionStatus === "demo" ? (
-          <p className={styles.muted}>Demo environment</p>
+          <p className={styles.muted}>
+            Demo environment: choose an identity provider on the next screen.
+          </p>
         ) : sessionStatus === "organization" ? (
           <Alert title="Organization sign-in required" tone="info">
             Demo sign-in is disabled in this environment. Sign in through your

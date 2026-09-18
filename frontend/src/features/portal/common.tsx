@@ -1,12 +1,35 @@
 "use client";
 import { useEffect, useState } from "react";
+import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { api } from "./api";
 import { usePortal } from "./portal-shell";
 import type { ReportRow } from "./types";
 import styles from "./portal.module.css";
+
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function billingMonthLabel(value: string) {
+  const [year, month] = value.split("-");
+  const monthIndex = Number(month) - 1;
+  return `${monthNames[monthIndex] ?? "Select a month"} ${year ?? ""}`.trim();
+}
 export function useData<T>(path: string) {
   const { refresh } = usePortal();
   const [state, setState] = useState<{
@@ -53,18 +76,90 @@ export function Status({ value }: { value: string }) {
 }
 export function MonthFilter() {
   const { period, setPeriod, busy } = usePortal();
+  const [open, setOpen] = useState(false);
+  const [visibleYear, setVisibleYear] = useState(() =>
+    Number(period.slice(0, 4)),
+  );
+  const selectedYear = Number(period.slice(0, 4));
+  const selectedMonth = Number(period.slice(5, 7));
+
   return (
-    <label className={styles.field}>
-      Billing month
-      <input
-        type="month"
-        value={period}
-        disabled={busy}
-        onChange={(e) => {
-          if (e.target.value) setPeriod(e.target.value);
-        }}
-      />
-    </label>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) setVisibleYear(selectedYear);
+        setOpen(nextOpen);
+      }}
+    >
+      <div className={styles.field}>
+        <span>Billing month</span>
+        <DialogTrigger asChild>
+          <button
+            className={styles.monthPickerTrigger}
+            type="button"
+            disabled={busy}
+            aria-label={`Billing month: ${billingMonthLabel(period)}`}
+          >
+            <CalendarDays aria-hidden="true" size={18} />
+            <span>{billingMonthLabel(period)}</span>
+          </button>
+        </DialogTrigger>
+      </div>
+      <DialogContent
+        title="Choose billing month"
+        description="Select the month whose records you want to review."
+      >
+        <div className={styles.monthPicker}>
+          <div className={styles.monthPickerYear}>
+            <button
+              type="button"
+              className={styles.monthPickerYearButton}
+              aria-label="Previous year"
+              onClick={() => setVisibleYear((year) => year - 1)}
+            >
+              <ChevronLeft aria-hidden="true" size={20} />
+            </button>
+            <strong aria-live="polite">{visibleYear}</strong>
+            <button
+              type="button"
+              className={styles.monthPickerYearButton}
+              aria-label="Next year"
+              onClick={() => setVisibleYear((year) => year + 1)}
+            >
+              <ChevronRight aria-hidden="true" size={20} />
+            </button>
+          </div>
+          <div
+            className={styles.monthPickerGrid}
+            aria-label={`${visibleYear} months`}
+          >
+            {monthNames.map((month, index) => {
+              const monthNumber = index + 1;
+              const isSelected =
+                selectedYear === visibleYear && selectedMonth === monthNumber;
+              return (
+                <button
+                  key={month}
+                  type="button"
+                  className={styles.monthPickerMonth}
+                  data-selected={isSelected || undefined}
+                  aria-pressed={isSelected}
+                  disabled={busy}
+                  onClick={() => {
+                    setPeriod(
+                      `${visibleYear}-${String(monthNumber).padStart(2, "0")}`,
+                    );
+                    setOpen(false);
+                  }}
+                >
+                  {month.slice(0, 3)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 export function DataState({
