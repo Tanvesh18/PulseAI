@@ -4,6 +4,7 @@ import './App.css'
 import './lock.css'
 import './auth-refine.css'
 import './google-button.css'
+import './polish.css'
 import { DirectorDashboard } from './DirectorDashboard'
 import { Eye, EyeOff, LockKeyhole, ShieldCheck } from 'lucide-react'
 
@@ -27,13 +28,21 @@ async function api(path: string, body: object) {
 }
 
 function App() {
-  const mode = 'signin' as const
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const storedUser = localStorage.getItem('pulseai_user')
+      return storedUser && localStorage.getItem('pulseai_token') ? JSON.parse(storedUser) as User : null
+    } catch {
+      localStorage.removeItem('pulseai_user')
+      localStorage.removeItem('pulseai_token')
+      return null
+    }
+  })
   const [googleReady, setGoogleReady] = useState(Boolean(window.google))
   const googleButton = useRef<HTMLDivElement>(null)
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
@@ -80,7 +89,7 @@ function App() {
     <section className="form-panel"><div className="form-shell"><header><h2>Director sign in</h2><p>Use your approved administrator account to continue.</p></header>
       <div className="workspace-card"><span><ShieldCheck size={20} /></span><div><strong>Director workspace</strong><p>Organization oversight and compliance reporting</p></div><LockKeyhole size={16} /></div>
       <form onSubmit={submit}><label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@emerson.com" autoComplete="email" required /></label>
-        <label>Password<span className="password-field"><input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} minLength={8} required /><button type="button" className="show-password" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+        <label>Password<span className="password-field"><input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" autoComplete="current-password" minLength={8} required /><button type="button" className="show-password" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
         {message && <p className="form-message" role="alert">{message}</p>}<button className="primary-button" disabled={loading} type="submit">{loading ? 'Signing in…' : 'Sign in securely'}</button>
       </form><div className="divider"><span />or continue with<span /></div>
       {googleClientId ? (googleReady ? <div className="google-button" ref={googleButton} /> : <div className="google-unavailable">Loading Google sign-in…</div>) : <div className="google-unavailable">Google sign-in will appear after <code>VITE_GOOGLE_CLIENT_ID</code> is configured.</div>}

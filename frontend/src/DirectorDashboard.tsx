@@ -18,6 +18,7 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   const [data, setData] = useState<any>(null)
   const [selectedDepartment, setSelectedDepartment] = useState<any>(null)
   const [error, setError] = useState('')
+  const returnFocusRef = useRef<HTMLElement | null>(null)
   const token = localStorage.getItem('pulseai_token') || ''
 
   const loadDashboard = useCallback(() => api('/dashboard', token).then((result) => { setDashboard(result); setError('') }).catch((err) => setError(err.message)), [token])
@@ -25,14 +26,16 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   useEffect(() => {
     if (tab === 'overview') return
     const routes: Record<Exclude<Tab, 'overview'>, string> = { exceptions: '/exceptions', reports: '/reports', audit: '/audit-events' }
-    api(routes[tab], token).then(setData).catch((err) => setError(err.message))
+    api(routes[tab], token).then((result) => { setData({ ...result, view: tab }); setError('') }).catch((err) => setError(err.message))
   }, [tab, token])
 
-  const openDepartment = async (id: number) => { try { setSelectedDepartment(await api(`/departments/${id}`, token)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open department.') } }
+  const openDepartment = async (id: number) => { try { returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setSelectedDepartment(await api(`/departments/${id}`, token)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open department.') } }
+  const closeDepartment = () => { setSelectedDepartment(null); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
   const metrics = dashboard?.metrics || {}
+  const tabLoading = tab !== 'overview' && data?.view !== tab
   const nav: Array<[Tab, string, LucideIcon]> = [['overview', 'Overview', LayoutDashboard], ['exceptions', 'Exceptions', AlertTriangle], ['reports', 'Reports', Flag], ['audit', 'Audit trail', Clock3]]
 
-  return <main className="director-app">
+  return <main className={`director-app director-tab-${tab}`}>
     <aside className="director-sidebar"><div className="director-logo"><span>P</span> pulse<span>AI</span></div><p className="workspace-label">DIRECTOR WORKSPACE</p>
       <nav>{nav.map(([id, label, Icon]) => <button className={tab === id ? 'active' : ''} onClick={() => { setTab(id); setSelectedDepartment(null) }} key={id}><b><Icon size={17} /></b>{label}{id === 'exceptions' && metrics.exceptions > 0 && <i>{metrics.exceptions}</i>}</button>)}</nav>
       <div className="sidebar-footer"><div className="avatar">{user.name[0]}</div><div><strong>{user.name}</strong><small>Director</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div>
@@ -41,10 +44,11 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
       {error && <div className="director-error"><span>{error}</span><button onClick={loadDashboard}>Try again</button></div>}
       {!dashboard && !error && <div className="director-loading">Loading your organization workspace…</div>}
       {tab === 'overview' && dashboard && <Overview dashboard={dashboard} onDepartment={openDepartment} />}
-      {tab === 'exceptions' && <Exceptions rows={data?.exceptions || []} />}
-      {tab === 'reports' && <Reports data={data} onDepartment={openDepartment} />}
-      {tab === 'audit' && <Audit events={data?.events || []} />}
-      {selectedDepartment && <DepartmentPanel data={selectedDepartment} onClose={() => setSelectedDepartment(null)} />}
+      {tab !== 'overview' && tabLoading && <div className="director-loading">Loading {tab}…</div>}
+      {tab === 'exceptions' && !tabLoading && <Exceptions rows={data?.exceptions || []} />}
+      {tab === 'reports' && !tabLoading && <Reports data={data} onDepartment={openDepartment} />}
+      {tab === 'audit' && !tabLoading && <Audit events={data?.events || []} />}
+      {selectedDepartment && <DepartmentPanel data={selectedDepartment} onClose={closeDepartment} />}
     </section>
   </main>
 }
