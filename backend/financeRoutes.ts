@@ -7,7 +7,10 @@ type FinanceRequest = Request & { actor?: { id: number; role: string; email: str
 type Filters = { period?: string; projectId?: number; employeeId?: number; clientId?: number; billingStatus?: string; billable?: string }
 
 async function writeFinanceAudit(connection: Pool | PoolConnection, actorId: number, action: string, entityType: string, entityId: number, before?: unknown, after?: unknown) {
-  await connection.query('INSERT INTO finance_audit_events (actor_user_id, action, entity_type, entity_id, before_state, after_state) VALUES (?, ?, ?, ?, ?, ?)', [actorId, action, entityType, entityId, before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after)])
+  const beforeState = before == null ? null : JSON.stringify(before); const afterState = after == null ? null : JSON.stringify(after)
+  await connection.query('INSERT INTO finance_audit_events (actor_user_id, action, entity_type, entity_id, before_state, after_state) VALUES (?, ?, ?, ?, ?, ?)', [actorId, action, entityType, entityId, beforeState, afterState])
+  await connection.query(`INSERT INTO audit_events (actor_name,actor_user_id,actor_role,action,target,entity_type,entity_id,before_state,after_state)
+    SELECT email,id,'finance',?,?,?, ?,CAST(? AS JSON),CAST(? AS JSON) FROM users WHERE id = ?`, [action, `${entityType} #${entityId}`, entityType, entityId, beforeState, afterState, actorId])
 }
 
 async function applicableRate(connection: Pool | PoolConnection, projectId: number, entryDate: string) {

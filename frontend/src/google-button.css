@@ -1,1 +1,22 @@
 .google-button iframe { max-width: 100% !important; }
+
+.github-button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d2939;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.github-button:hover:not(:disabled) { background: #f8fafc; border-color: #98a2b3; }
+.github-button:focus-visible { outline: 3px solid rgba(61, 92, 255, .25); outline-offset: 2px; }
+.github-button:disabled { cursor: wait; opacity: .65; }
