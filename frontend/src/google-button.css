@@ -1,9 +1,10 @@
+.google-button { display: grid; justify-content: center; width: 100%; }
 .google-button iframe { max-width: 100% !important; }
 
 .github-button {
-  width: 100%;
+  width: min(100%, 320px);
   min-height: 44px;
-  margin-top: 10px;
+  margin: 10px auto 0;
   border: 1px solid #d0d5dd;
   border-radius: 6px;
   background: #fff;

@@ -1,0 +1,157 @@
+/* Shared operational-shell refinement: consistent density without changing workspace behavior. */
+:root {
+  --pulse-focus: #2c8d7d;
+}
+
+::selection {
+  background: #c9ece5;
+  color: #102b46;
+}
+
+.employee-table-wrap,
+.finance-table-wrap,
+.table-wrap {
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #9cafb9 transparent;
+  scrollbar-width: thin;
+}
+
+.employee-table-wrap::-webkit-scrollbar,
+.finance-table-wrap::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar {
+  height: 8px;
+}
+
+.employee-table-wrap::-webkit-scrollbar-thumb,
+.finance-table-wrap::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb {
+  background: #9cafb9;
+  border-radius: 8px;
+}
+
+.employee-table-wrap:focus-visible,
+.finance-table-wrap:focus-visible,
+.table-wrap:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--pulse-focus) 45%, transparent);
+  outline-offset: 3px;
+}
+
+/* Authentication is a single-screen entry point, not part of the fixed-width
+   operational canvas. Avoid the content-box height overflow that made it scroll. */
+.auth-page,
+.brand-panel,
+.form-panel {
+  box-sizing: border-box;
+}
+
+@media (min-width: 781px) {
+  .auth-page,
+  .brand-panel,
+  .form-panel {
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+
+  .auth-page {
+    overflow: hidden;
+    grid-template-columns: minmax(420px, 42vw) minmax(0, 1fr);
+  }
+
+  .brand-panel {
+    padding-inline: clamp(42px, 5.25vw, 100px);
+  }
+
+  .form-panel {
+    align-content: center;
+    padding: 20px clamp(44px, 7vw, 132px);
+  }
+
+  .form-shell {
+    width: min(100%, 560px);
+  }
+
+  .form-shell header > p:last-child {
+    margin-bottom: 18px;
+  }
+
+  .role-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .role-card {
+    min-width: 0;
+    min-height: 56px;
+    padding: 9px 10px;
+    gap: 8px;
+    border-radius: 8px;
+  }
+
+  .role-card small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .role-icon {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    border-radius: 7px;
+  }
+
+  .workspace-card {
+    min-height: 58px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+  }
+
+  .workspace-card > span {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+  }
+
+  .workspace-card p {
+    font-size: 11px;
+  }
+
+  .divider {
+    margin-block: 16px 12px;
+  }
+
+  .primary-button {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .employee-app *,
+  .finance-app *,
+  .director-app * {
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 780px) {
+  .auth-page {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .brand-panel,
+  .form-panel,
+  .form-shell {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .google-button,
+  .github-button {
+    justify-self: center;
+  }
+}

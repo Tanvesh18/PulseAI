@@ -1208,7 +1208,7 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
       }
     }
     const [departments] = await pool.query<RowDataPacket[]>(`SELECT d.id, d.code, d.name, COUNT(DISTINCT e.id) AS employeeCount,
-      SUM(t.status = 'submitted') AS submittedCount, SUM(t.status = 'approved') AS approvedCount,
+      SUM(t.status IN ('submitted', 'resubmitted', 'returned', 'approved')) AS submittedCount, SUM(t.status = 'approved') AS approvedCount,
       SUM(t.status IN ('draft', 'submitted', 'resubmitted')) AS pendingCount, SUM(v.id IS NOT NULL AND v.resolved = FALSE) AS flaggedCount
       FROM departments d LEFT JOIN employees e ON e.department_id = d.id AND e.active = TRUE
       LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ?

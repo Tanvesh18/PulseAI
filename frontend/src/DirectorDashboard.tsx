@@ -4,6 +4,7 @@ import './director-refine.css'
 import './director-ops.css'
 import './director-metrics.css'
 import { AlertTriangle, Bell, Check, CircleAlert, ClipboardCheck, Clock3, FileClock, Flag, Info, LayoutDashboard, LogOut, type LucideIcon, X } from 'lucide-react'
+import { transitionWorkspace } from './viewTransition'
 
 type User = { name: string; email: string; role: 'director' }
 type Tab = 'overview' | 'approvals' | 'exceptions' | 'reports' | 'audit'
@@ -21,6 +22,7 @@ const apiAction = (path: string, token: string, body?: object) => fetch(`/api/di
 export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>('overview')
   const [dashboard, setDashboard] = useState<any>(null)
+  const [financial, setFinancial] = useState<any>(null)
   const [data, setData] = useState<any>(null)
   const [selectedDepartment, setSelectedDepartment] = useState<any>(null)
   const [selectedApproval, setSelectedApproval] = useState<any>(null)
@@ -29,7 +31,7 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const token = localStorage.getItem('pulseai_token') || ''
 
-  const loadDashboard = useCallback(() => api('/dashboard', token).then((result) => { setDashboard(result); setError('') }).catch((err) => setError(err.message)), [token])
+  const loadDashboard = useCallback(() => Promise.all([api('/dashboard', token), api('/financial-report', token)]).then(([result, financialResult]) => { setDashboard(result); setFinancial(financialResult); setError('') }).catch((err) => setError(err.message)), [token])
   useEffect(() => { loadDashboard() }, [loadDashboard])
   useEffect(() => {
     if (tab === 'overview') return
@@ -40,10 +42,10 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
     request.then((result) => { setData({ ...result, view: tab }); setError('') }).catch((err) => setError(err.message))
   }, [tab, token])
 
-  const openDepartment = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; setSelectedDepartment(await api(`/departments/${id}`, token)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open department.') } }
-  const closeDepartment = () => { setSelectedDepartment(null); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
-  const openApproval = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; setSelectedApproval(await api(`/approvals/${id}`, token)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open submission.') } }
-  const closeApproval = () => { setSelectedApproval(null); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
+  const openDepartment = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; const result = await api(`/departments/${id}`, token); transitionWorkspace(() => setSelectedDepartment(result)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open department.') } }
+  const closeDepartment = () => { transitionWorkspace(() => setSelectedDepartment(null)); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
+  const openApproval = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; const result = await api(`/approvals/${id}`, token); transitionWorkspace(() => setSelectedApproval(result)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open submission.') } }
+  const closeApproval = () => { transitionWorkspace(() => setSelectedApproval(null)); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
   const decideApproval = async (id: number, decision: 'approve' | 'return', reason?: string) => { setActionLoading(true); try { await apiAction(`/approvals/${id}/${decision}`, token, reason ? { reason } : undefined); closeApproval(); const result = await api('/approvals', token); setData({ ...result, view: 'approvals' }); loadDashboard() } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update the submission.') } finally { setActionLoading(false) } }
   const metrics = dashboard?.metrics || {}
   const tabLoading = tab !== 'overview' && data?.view !== tab
@@ -51,13 +53,13 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
 
   return <main className={`director-app director-tab-${tab}`}>
     <aside className="director-sidebar"><div className="director-logo"><span>P</span> pulse<span>AI</span></div><p className="workspace-label">DIRECTOR WORKSPACE</p>
-      <nav>{nav.map(([id, label, Icon]) => <button className={tab === id ? 'active' : ''} onClick={() => { setTab(id); setSelectedDepartment(null) }} key={id}><b><Icon size={17} /></b>{label}{id === 'exceptions' && metrics.exceptions > 0 && <i>{metrics.exceptions}</i>}</button>)}</nav>
+      <nav>{nav.map(([id, label, Icon]) => <button className={tab === id ? 'active' : ''} onClick={() => transitionWorkspace(() => { setTab(id); setSelectedDepartment(null) })} key={id}><b><Icon size={17} /></b>{label}{id === 'exceptions' && metrics.exceptions > 0 && <i><LiveMetric value={metrics.exceptions} /></i>}</button>)}</nav>
       <div className="sidebar-footer"><div className="avatar">{user.name[0]}</div><div><strong>{user.name}</strong><small>Director</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div>
     </aside>
     <section className="director-content"><header className="content-header"><div><h1>{tab === 'overview' ? 'Executive overview' : tab[0].toUpperCase() + tab.slice(1)}</h1><p className="header-subtitle">{dashboard?.period || 'Current reporting period'} snapshot</p></div><button type="button" className="notification-status" onClick={() => document.getElementById('director-notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} aria-label={`Jump to ${dashboard?.notifications?.length || 0} unread notifications`}><Bell size={18} /><span>{dashboard?.notifications?.length || 0}</span></button></header>
       {error && <div className="director-error"><span>{error}</span><button onClick={loadDashboard}>Try again</button></div>}
       {!dashboard && !error && <div className="director-loading">Loading your organization workspace…</div>}
-      {tab === 'overview' && dashboard && <Overview dashboard={dashboard} onDepartment={openDepartment} />}
+      {tab === 'overview' && dashboard && <Overview dashboard={dashboard} financial={financial} onDepartment={openDepartment} onNavigate={(nextTab) => transitionWorkspace(() => setTab(nextTab))} />}
       {tab !== 'overview' && tabLoading && <div className="director-loading">Loading {tab}…</div>}
       {tab === 'approvals' && !tabLoading && <Approvals rows={data?.submissions || []} onOpen={openApproval} />}
       {tab === 'exceptions' && !tabLoading && <Exceptions rows={data?.exceptions || []} />}
@@ -69,12 +71,57 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   </main>
 }
 
-function Overview({ dashboard, onDepartment }: { dashboard: any; onDepartment: (id: number, trigger: HTMLElement) => void }) {
+function LiveMetric({ value, decimals = 0 }: { value: number | string | null | undefined; decimals?: number }) {
+  const numericValue = Number(value) || 0
+  const [displayValue, setDisplayValue] = useState(numericValue)
+  const [updating, setUpdating] = useState(false)
+  const previousValue = useRef(numericValue)
+
+  useEffect(() => {
+    const start = previousValue.current
+    previousValue.current = numericValue
+    if (start === numericValue || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayValue(numericValue)
+      return
+    }
+    const duration = 360
+    const startedAt = performance.now()
+    let frame = 0
+    setUpdating(true)
+    const tick = (now: number) => {
+      const progress = Math.min((now - startedAt) / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplayValue(start + (numericValue - start) * eased)
+      if (progress < 1) frame = window.requestAnimationFrame(tick)
+      else setUpdating(false)
+    }
+    frame = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(frame)
+  }, [numericValue])
+
+  return <span className={`live-metric${updating ? ' is-updating' : ''}`}>{displayValue.toFixed(decimals)}</span>
+}
+
+function Overview({ dashboard, financial, onDepartment, onNavigate }: { dashboard: any; financial: any; onDepartment: (id: number, trigger: HTMLElement) => void; onNavigate: (tab: Tab) => void }) {
   const metrics: Array<[string, number]> = [['Active employees', dashboard.metrics.employees], ['Approved', dashboard.metrics.approved], ['Awaiting action', dashboard.metrics.pending], ['Missing workdays', dashboard.metrics.missingWorkdays || 0], ['Open exceptions', dashboard.metrics.exceptions]]
-  return <>{dashboard.billingCycle && <BillingCycle cycle={dashboard.billingCycle} />}<dl className="metrics-strip">{metrics.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-    <section className="action-ledger"><div className="section-heading"><div><h2>Exceptions requiring review</h2><p>Priority items across the current reporting period</p></div><span>{dashboard.exceptions.length} open</span></div>{dashboard.exceptions.length ? <div className="exception-list">{dashboard.exceptions.map((item: any) => <article className="exception-row" key={item.id}><span className={`exception-marker ${item.severity}`} aria-label={item.severity}>{item.severity === 'critical' ? <CircleAlert size={16} /> : <Info size={16} />}</span><div className="exception-person"><strong>{item.employeeName}</strong><small>{item.department}</small></div><p>{item.message}</p><span className={`workflow-state ${item.status}`}>{item.status}</span></article>)}</div> : <p className="empty-copy">No open workflow exceptions for this reporting period.</p>}</section>
-    <section className="compliance-section"><div className="section-heading"><div><h2>Department compliance</h2><p>Submission and approval position by team</p></div><span>{dashboard.period}</span></div><DepartmentTable rows={dashboard.departments} onDepartment={onDepartment} /></section>
+  return <>{dashboard.billingCycle && <BillingCycle cycle={dashboard.billingCycle} />}<dl className="metrics-strip">{metrics.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><LiveMetric value={value} /></dd></div>)}</dl>
+    <OperationsMap metrics={dashboard.metrics} financial={financial} onNavigate={onNavigate} />
+    <section className="action-ledger"><div className="section-heading"><div><h2>Exceptions requiring review</h2><p>Priority items across the current reporting period</p></div><span><LiveMetric value={dashboard.exceptions.length} /> open</span></div>{dashboard.exceptions.length ? <div className="exception-list">{dashboard.exceptions.map((item: any) => <article className="exception-row" key={item.id}><span className={`exception-marker ${item.severity}`} aria-label={item.severity}>{item.severity === 'critical' ? <CircleAlert size={16} /> : <Info size={16} />}</span><div className="exception-person"><strong>{item.employeeName}</strong><small>{item.department}</small></div><p>{item.message}</p><span className={`workflow-state ${item.status}`}>{item.status}</span></article>)}</div> : <p className="empty-copy">No open workflow exceptions for this reporting period.</p>}</section>
+    <section className="compliance-section"><div className="section-heading"><div><h2>Department-wise submission status</h2><p>Current-period reporting progress by PulseAI department.</p></div><span>{dashboard.period}</span></div><DepartmentTable rows={dashboard.departments} onDepartment={onDepartment} /></section>
     <section className="notifications-section" id="director-notifications"><div className="section-heading"><div><h2>Notifications</h2></div><span>{dashboard.notifications.length} unread</span></div>{dashboard.notifications.length ? dashboard.notifications.map((notice: any) => <div className="notice" key={notice.id}><span className={`notice-dot ${notice.type}`} /><div><strong>{notice.title}</strong><p>{notice.message}</p></div></div>) : <p className="empty-copy">No unread notifications.</p>}</section></>
+}
+
+function OperationsMap({ metrics, financial, onNavigate }: { metrics: any; financial: any; onNavigate: (tab: Tab) => void }) {
+  const invoiceCount = (financial?.invoices || []).reduce((total: number, item: any) => total + Number(item.count || 0), 0)
+  const billedHours = (financial?.hours || []).reduce((total: number, item: any) => total + Number(item.billed || 0), 0)
+  const nodes: Array<{ role: string; label: string; detail: string; value: number; suffix: string; tab: Tab; tone: string }> = [
+    { role: 'HR', label: 'Workforce', detail: 'Active workforce record', value: Number(metrics.employees || 0), suffix: 'active', tab: 'audit', tone: 'ready' },
+    { role: 'Employee', label: 'Time recorded', detail: 'Timesheets awaiting review', value: Number(metrics.submitted || 0), suffix: 'awaiting', tab: 'approvals', tone: 'pending' },
+    { role: 'Manager', label: 'Approved work', detail: 'Manager-approved timesheets', value: Number(metrics.approved || 0), suffix: 'approved', tab: 'reports', tone: 'ready' },
+    { role: 'Finance', label: 'Finalized billing', detail: `${billedHours.toFixed(1)} billed approved hours`, value: invoiceCount, suffix: invoiceCount === 1 ? 'invoice' : 'invoices', tab: 'reports', tone: invoiceCount ? 'ready' : 'neutral' },
+    { role: 'Director', label: 'Leadership action', detail: 'Open organization exceptions', value: Number(metrics.exceptions || 0), suffix: 'open', tab: 'exceptions', tone: Number(metrics.exceptions || 0) ? 'attention' : 'ready' },
+  ]
+  return <section className="operations-map" aria-labelledby="operations-map-title"><div className="operations-map-heading"><div><h2 id="operations-map-title">Operational flow</h2><p>Current-period work moves through the shared workforce, approval, and billing record.</p></div><span>Live record</span></div><ol className="operations-flow">{nodes.map((node) => <li key={node.role}><button type="button" className={`operations-node ${node.tone}`} onClick={() => onNavigate(node.tab)} aria-label={`Open ${node.label} in ${node.tab}`}><span className="operations-role">{node.role}</span><strong>{node.label}</strong><b><LiveMetric value={node.value} /> <small>{node.suffix}</small></b><span className="operations-detail">{node.detail}</span></button></li>)}</ol></section>
 }
 
 const billingStages = [
@@ -88,7 +135,7 @@ function BillingCycle({ cycle }: { cycle: { periodLabel: string; startsOn: strin
   return <section className="billing-cycle" aria-labelledby="billing-cycle-title"><div className="billing-cycle-heading"><div><h2 id="billing-cycle-title">Billing cycle workflow</h2><p>{cycle.periodLabel} · {formatCycleDate(cycle.startsOn)}–{formatCycleDate(cycle.endsOn)}</p></div><span className="billing-cycle-status">In progress</span></div><ol className="billing-stages">{billingStages.map(([id, label], index) => { const state = index < activeIndex ? 'complete' : index === activeIndex ? 'current' : 'upcoming'; return <li className={`billing-stage ${state}`} key={id} aria-current={state === 'current' ? 'step' : undefined}><span className="billing-stage-mark">{state === 'complete' ? <Check size={13} aria-hidden="true" /> : index + 1}</span><span>{label}</span></li> })}</ol><p className="billing-cycle-deadline">Submission deadline <strong>{formatCycleDate(cycle.submissionDeadline)}</strong></p></section>
 }
 
-function DepartmentTable({ rows, onDepartment }: { rows: any[]; onDepartment: (id: number, trigger: HTMLElement) => void }) { return <div className="table-wrap"><table className="compliance-table"><thead><tr><th>Department</th><th>Headcount</th><th>Approved</th><th>Awaiting</th><th>Exceptions</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>{rows.map((row) => { const status = row.flaggedCount > 0 ? 'Needs review' : row.pendingCount > 0 ? 'In progress' : 'Complete'; const tone = row.flaggedCount > 0 ? 'review' : row.pendingCount > 0 ? 'progress' : 'complete'; return <tr key={row.id}><td><strong>{row.name}</strong><small>{row.code}</small></td><td>{row.employeeCount}</td><td>{row.approvedCount}</td><td>{row.pendingCount}</td><td>{row.flaggedCount || '—'}</td><td><span className={`table-state ${tone}`}>{status}</span></td><td><button className="table-action" onClick={(event) => onDepartment(row.id, event.currentTarget)}>Review team</button></td></tr> })}</tbody></table></div> }
+function DepartmentTable({ rows, onDepartment }: { rows: any[]; onDepartment: (id: number, trigger: HTMLElement) => void }) { return <div className="table-wrap"><table className="compliance-table"><thead><tr><th>Department</th><th>Headcount</th><th>Submitted</th><th>Approved</th><th>Progress</th><th>Exceptions</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>{rows.map((row) => { const headcount = Number(row.employeeCount || 0); const approved = Number(row.approvedCount || 0); const submitted = Number(row.submittedCount ?? approved); const progress = headcount ? Math.min(100, Math.round(submitted / headcount * 100)) : 0; const status = !headcount ? 'No active employees' : submitted === 0 ? 'Not started' : submitted < headcount ? 'In progress' : approved === headcount ? 'Approved' : 'Submitted'; const tone = !headcount ? 'neutral' : status === 'Approved' ? 'complete' : status === 'Submitted' || status === 'In progress' ? 'progress' : 'review'; return <tr key={row.id}><td><strong>{row.name}</strong><small>{row.code}</small></td><td>{headcount}</td><td>{submitted}</td><td>{approved}</td><td><div className="submission-progress" aria-label={`${progress}% of active employees have submitted`}><span><i style={{ transform: `scaleX(${progress / 100})` }} /></span><b>{progress}%</b></div></td><td>{row.flaggedCount || '—'}</td><td><span className={`table-state ${tone}`}>{status}</span></td><td><button className="table-action" onClick={(event) => onDepartment(row.id, event.currentTarget)}>Review team</button></td></tr> })}</tbody></table></div> }
 function Approvals({ rows, onOpen }: { rows: any[]; onOpen: (id: number, trigger: HTMLElement) => void }) { const awaiting = rows.filter((row) => row.status === 'submitted').length; return <section className="director-card full-table approval-queue"><div className="card-heading"><div><h2>Department cycle reviews</h2><p>Director decisions on department-level cycle submissions. Employee timesheet approvals remain with Managers.</p></div><span className="queue-count">{awaiting} awaiting decision</span></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Department</th><th>Submitted by</th><th>Employees</th><th>Hours</th><th>Exceptions</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.department}</strong><small>{row.departmentCode}</small></td><td>{row.submittedBy}</td><td>{row.employeeCount}</td><td>{row.totalHours}</td><td>{row.exceptionCount || '—'}</td><td><span className={`approval-state ${row.status}`}>{row.status === 'returned' ? 'Returned' : row.status}</span></td><td><button className="table-action" onClick={(event) => onOpen(row.id, event.currentTarget)}>{row.status === 'submitted' ? 'Review' : 'View decision'}</button></td></tr>)}</tbody></table></div> : <p className="empty-copy">No department submissions are available for this reporting period.</p>}</section> }
 function ApprovalPanel({ data, loading, onClose, onDecision }: { data: any; loading: boolean; onClose: () => void; onDecision: (id: number, decision: 'approve' | 'return', reason?: string) => void }) { const closeRef = useRef<HTMLButtonElement>(null); const panelRef = useRef<HTMLElement>(null); const [reason, setReason] = useState(''); useEffect(() => { closeRef.current?.focus() }, []); const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => { if (event.key === 'Escape') { event.preventDefault(); onClose(); return } if (event.key !== 'Tab') return; const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || []); const first = focusable[0]; const last = focusable[focusable.length - 1]; if (!first || !last) { event.preventDefault(); return } if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }; const submission = data.submission; return <div className="panel-overlay"><aside className="department-panel approval-panel" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="approval-title" onKeyDown={handleKeyDown}><button className="panel-close" ref={closeRef} onClick={onClose} aria-label="Close submission review"><X size={18} /></button><p className="panel-label">Department cycle decision</p><h2 id="approval-title">{submission.department}</h2><p className="header-subtitle">{submission.periodLabel} · Submitted by {submission.submittedBy}</p><p className="header-subtitle">This decision updates the department cycle submission only. It does not approve, reject, or change employee timesheets.</p>{submission.returnReason && <p className="return-reason"><strong>Return reason</strong>{submission.returnReason}</p>}<div className="table-wrap"><table><thead><tr><th>Employee</th><th>Hours</th><th>Status</th><th>Finding</th></tr></thead><tbody>{data.employees.map((employee: any) => <tr key={employee.employeeCode}><td><strong>{employee.name}</strong><small>{employee.employeeCode}</small></td><td>{employee.hours ?? '—'}</td><td><span className="status-pill">{employee.status || 'No entry'}</span></td><td>{employee.finding || '—'}</td></tr>)}</tbody></table></div>{submission.status === 'submitted' && <div className="approval-actions"><label>Reason if returning<textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain what needs to be corrected in the department submission." /></label><div><button className="quiet-button" disabled={loading || reason.trim().length < 3} onClick={() => onDecision(submission.id, 'return', reason)}>Return department submission</button><button className="approval-button" disabled={loading} onClick={() => onDecision(submission.id, 'approve')}>{loading ? 'Saving…' : 'Approve department submission'}</button></div></div>}</aside></div> }
 function Exceptions({ rows }: { rows: any[] }) { return <section className="director-card full-table"><div className="card-heading"><div><h2>Open exceptions</h2><p>Items needing leadership visibility or escalation</p></div></div><div className="table-wrap"><table><thead><tr><th>Severity</th><th>Employee</th><th>Department</th><th>Hours</th><th>Issue</th><th>Workflow status</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><span className={`severity-label ${row.severity}`}>{row.severity}</span></td><td><strong>{row.employeeName}</strong><small>{row.employeeCode}</small></td><td>{row.department}</td><td>{row.hours || '—'}</td><td>{row.message}</td><td><span className="status-pill">{row.status}</span></td></tr>)}</tbody></table></div></section> }

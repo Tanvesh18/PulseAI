@@ -7,6 +7,7 @@ import './google-button.css'
 import './polish.css'
 import './responsive.css'
 import './bolder.css'
+import './operations-refine.css'
 import { DirectorDashboard } from './DirectorDashboard'
 import { EmployeeDashboard } from './EmployeeDashboard'
 import { ManagerDashboard } from './ManagerDashboard'
@@ -64,7 +65,7 @@ function App() {
     try { const nextUser = JSON.parse(oauthUser || '') as User; if (!nextUser?.email || !nextUser?.role) throw new Error(); localStorage.setItem('pulseai_token', token!); localStorage.setItem('pulseai_user', JSON.stringify(nextUser)); setUser(nextUser) } catch { setMessage('GitHub sign-in could not be completed. Please try again.') }
   }, [])
   useEffect(() => { const timer = window.setInterval(() => { if (window.google) { setGoogleReady(true); window.clearInterval(timer) } }, 150); return () => window.clearInterval(timer) }, [])
-  useEffect(() => { if (!googleClientId || !googleReady || !window.google || !googleButton.current) return; googleButton.current.innerHTML = ''; window.google.accounts.id.initialize({ client_id: googleClientId, callback: async ({ credential }) => { setLoading(true); try { completeSignIn(await api('/auth/google', { credential, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Google sign-in failed.') } finally { setLoading(false) } } }); window.google.accounts.id.renderButton(googleButton.current, { theme: 'outline', size: 'large', width: 330, text: 'signin_with' }) }, [role, googleClientId, googleReady])
+  useEffect(() => { if (!googleClientId || !googleReady || !window.google || !googleButton.current) return; googleButton.current.innerHTML = ''; window.google.accounts.id.initialize({ client_id: googleClientId, callback: async ({ credential }) => { setLoading(true); try { completeSignIn(await api('/auth/google', { credential, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Google sign-in failed.') } finally { setLoading(false) } } }); window.google.accounts.id.renderButton(googleButton.current, { theme: 'outline', size: 'large', width: 320, text: 'signin_with' }) }, [role, googleClientId, googleReady])
   const chooseRole = (next: Role) => { setRole(next); setRegistering(false); setMessage('') }
   const submit = async (event: FormEvent) => { event.preventDefault(); setMessage(''); setLoading(true); try { completeSignIn(registering ? await api('/auth/register', { name, email, password, role: 'employee' }) : await api('/auth/login', { email, password, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to continue.') } finally { setLoading(false) } }
   if (user?.role === 'director') return <DirectorDashboard user={{ ...user, role: 'director' }} onSignOut={signOut} />
