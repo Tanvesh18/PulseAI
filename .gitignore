@@ -55,3 +55,5 @@ artifacts/
 **/*screenshot*.png
 **/*screenshot*.jpg
 **/*screenshot*.jpeg
+# Local project documentation
+PRODUCT.md
