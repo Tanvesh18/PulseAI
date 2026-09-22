@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiUrl } from './api'
 import './director.css'
 import './director-refine.css'
 import './director-ops.css'
@@ -15,12 +16,12 @@ type Tab = 'overview' | 'approvals' | 'exceptions' | 'reports' | 'audit'
 type AuditFilters = { search: string; role: string; entity: string }
 void Audit
 void LegacyOverview
-const api = (path: string, token: string) => fetch(`/api/director${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
+const api = (path: string, token: string) => fetch(apiUrl(`/director${path}`), { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
   const data = await response.json()
   if (!response.ok) throw new Error(data.message || 'Unable to load data.')
   return data
 })
-const apiAction = (path: string, token: string, body?: object) => fetch(`/api/director${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(async (response) => {
+const apiAction = (path: string, token: string, body?: object) => fetch(apiUrl(`/director${path}`), { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(async (response) => {
   const data = await response.json()
   if (!response.ok) throw new Error(data.message || 'Unable to update the submission.')
   return data

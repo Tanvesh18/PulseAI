@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
+import { apiUrl } from './api'
 import { Bell, Check, ClipboardCheck, FolderKanban, History, LayoutDashboard, LogOut, Plus, RotateCcw, Users } from 'lucide-react'
 import './employee.css'
 import { transitionWorkspace } from './viewTransition'
 
 type User = { name: string; email: string; role: 'manager' }
 type Tab = 'overview' | 'queue' | 'team' | 'projects' | 'exceptions' | 'history' | 'notifications'
-const api = (path: string, token: string, method = 'GET', body?: object) => fetch(`/api/manager${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Unable to update Manager workspace.'); return data })
+const api = (path: string, token: string, method = 'GET', body?: object) => fetch(apiUrl(`/manager${path}`), { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Unable to update Manager workspace.'); return data })
 
 export function ManagerDashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const token = localStorage.getItem('pulseai_token') || ''; const [tab, setTab] = useState<Tab>('overview'); const [data, setData] = useState<any>({}); const [selected, setSelected] = useState<any>(null); const [message, setMessage] = useState('')

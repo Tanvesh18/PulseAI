@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { apiUrl } from './api'
 import { Archive, ArrowDownToLine, Bell, BriefcaseBusiness, Check, ChevronLeft, CircleAlert, ClipboardList, FileClock, LayoutDashboard, LogOut, Receipt, Settings2 } from 'lucide-react'
 import './finance.css'
 
@@ -6,7 +7,7 @@ type User = { name: string; email: string; role: 'finance' }
 type Tab = 'overview' | 'work' | 'invoices' | 'projects' | 'exceptions' | 'audit' | 'notifications'
 
 async function api(path: string, token: string, method = 'GET', body?: object) {
-  const response = await fetch(`/api/finance${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  const response = await fetch(apiUrl(`/finance${path}`), { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   const text = await response.text(); let data: any = {}
   try { data = text ? JSON.parse(text) : {} } catch { data = { message: 'The server returned an unreadable response.' } }
   if (!response.ok) throw new Error(data.message || 'Unable to complete Finance action.')
@@ -19,7 +20,7 @@ function money(value: unknown, currency: string) {
 }
 
 async function downloadCsv(path: string, token: string) {
-  const response = await fetch(`/api/finance${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  const response = await fetch(apiUrl(`/finance${path}`), { headers: { Authorization: `Bearer ${token}` } })
   if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.message || 'Unable to export this report.') }
   const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1] || 'pulseai-finance.csv'; link.click(); URL.revokeObjectURL(url)
 }

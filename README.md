@@ -111,8 +111,11 @@ Copy-Item .env.example .env
 Set the client ID in `frontend/.env`:
 
 ```dotenv
+VITE_API_URL=
 VITE_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 ```
+
+Leave `VITE_API_URL` blank for local development so Vite's `/api` proxy continues to target `http://127.0.0.1:4000`. Set it to the deployed backend origin for Vercel, for example `https://your-backend.up.railway.app`, without adding `/api`.
 
 The Google OAuth client must be configured for the local frontend origin. Password sign-in remains available without Google configuration.
 
@@ -199,7 +202,8 @@ npm run preview   # Serve the production bundle locally
 ```bash
 cd backend
 npm run dev              # Start the API with tsx watch mode
-npm start                # Start the API once
+npm run build            # Compile the API into backend/dist
+npm start                # Run the compiled API with Node
 npm run typecheck        # Run TypeScript without emitting files
 npm test                 # Run unit and rule tests
 npm run test:integration # Run MySQL integration tests when enabled
@@ -223,11 +227,16 @@ Important backend variables include:
 | `DB_HOST` | MySQL host | `localhost` |
 | `DB_PORT` | MySQL port | `3306` |
 | `DB_NAME` | Application database name | `pulseai` |
+| `MYSQLHOST` / `MYSQLPORT` | Railway MySQL fallback host and port | Blank / `3306` |
+| `MYSQLUSER` / `MYSQLPASSWORD` | Railway MySQL fallback credentials | Blank |
+| `MYSQLDATABASE` | Railway MySQL fallback database name | Blank |
 | `JWT_SECRET` | JWT signing secret | Required |
 | `SEED_DEMO_DATA` | Enable local demonstration records | Disabled unless `true` |
 | `MANAGER_DAILY_HOURS_WARNING_THRESHOLD` | Optional manager warning threshold | Blank |
 
-OAuth and role-account variables are documented inline in [backend/.env.example](backend/.env.example). Environment files containing real credentials are intentionally ignored by Git. `.env.example` files remain trackable.
+`DB_*` variables take precedence when explicitly configured. On Railway, the `MYSQL*` variables can be supplied directly by the MySQL service. The backend skips `CREATE DATABASE` when Railway database variables are present, then initializes the application tables and compatibility columns at startup. Review the startup initialization carefully before applying schema changes to an existing production database.
+
+OAuth, role-account, and frontend variables are documented inline in [backend/.env.example](backend/.env.example) and [frontend/.env.example](frontend/.env.example). Environment files containing real credentials are intentionally ignored by Git. `.env.example` files remain trackable.
 
 ## Security and Authorization
 

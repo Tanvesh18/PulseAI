@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { apiUrl } from './api'
 import { Bell, Check, ClipboardList, History, LayoutDashboard, LogOut, Pencil, Plus, Send, Trash2 } from 'lucide-react'
 import './employee.css'
 
 type User = { name: string; email: string; role: 'employee' }
 type Tab = 'overview' | 'timesheet' | 'history' | 'notifications'
-const api = (path: string, token: string, method = 'GET', body?: object) => fetch(`/api/employee${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Unable to update timesheet.'); return data })
+const api = (path: string, token: string, method = 'GET', body?: object) => fetch(apiUrl(`/employee${path}`), { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Unable to update timesheet.'); return data })
 
 export function EmployeeDashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>('overview'); const [data, setData] = useState<any>(null); const [message, setMessage] = useState('')

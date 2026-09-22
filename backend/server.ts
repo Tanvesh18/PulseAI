@@ -25,28 +25,29 @@ interface UserRecord extends RowDataPacket {
 
 const app = express()
 const port = Number(process.env.PORT || 4000)
-const dbName = process.env.DB_NAME || 'pulseai'
+const dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'pulseai'
 const jwtSecret = process.env.JWT_SECRET
 const googleClientId = process.env.GOOGLE_CLIENT_ID
 const githubClientId = process.env.GITHUB_CLIENT_ID
 const githubClientSecret = process.env.GITHUB_CLIENT_SECRET
 const githubCallbackUrl = process.env.GITHUB_CALLBACK_URL || `http://localhost:${port}/api/auth/github/callback`
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173'
+const railwayDatabase = Boolean(process.env.MYSQLHOST || process.env.MYSQLDATABASE)
 const validRoles = new Set<Role>(['employee', 'manager', 'hr', 'director', 'finance'])
 
 if (!jwtSecret) throw new Error('JWT_SECRET is required. Copy backend/.env.example to backend/.env and set it.')
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }))
+app.use(cors({ origin: clientOrigin }))
 app.use(express.json())
 
 let pool: mysql.Pool
 let googleClient: OAuth2Client | undefined
 const githubStates = new Map<string, { role: Role; expiresAt: number }>()
 const baseDbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
+  host: process.env.DB_HOST || process.env.MYSQLHOST || 'localhost',
+  port: Number(process.env.DB_PORT || process.env.MYSQLPORT || 3306),
+  user: process.env.DB_USER || process.env.MYSQLUSER || 'root',
+  password: process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '',
 }
 
 const publicUser = (user: Pick<UserRecord, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>) => ({
@@ -66,9 +67,11 @@ function validRole(role: unknown): Role | null {
 }
 
 async function initializeDatabase() {
-  const bootstrap = await mysql.createConnection(baseDbConfig)
-  await bootstrap.query(`CREATE DATABASE IF NOT EXISTS \`${dbName.replace(/`/g, '``')}\``)
-  await bootstrap.end()
+  if (!railwayDatabase) {
+    const bootstrap = await mysql.createConnection(baseDbConfig)
+    await bootstrap.query(`CREATE DATABASE IF NOT EXISTS \`${dbName.replace(/`/g, '``')}\``)
+    await bootstrap.end()
+  }
 
   pool = mysql.createPool({ ...baseDbConfig, database: dbName, waitForConnections: true, connectionLimit: 10 })
   await pool.query(`CREATE TABLE IF NOT EXISTS users (

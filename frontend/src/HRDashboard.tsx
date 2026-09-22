@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import { apiUrl } from './api'
 import { CalendarDays, LogOut, Users, UserCog } from 'lucide-react'
 import './employee.css'
 import './hr.css'
@@ -8,7 +9,7 @@ type User = { name: string; email: string; role: 'hr' }
 type Tab = 'workforce' | 'leave' | 'calendar'
 const token = () => localStorage.getItem('pulseai_token') || ''
 async function api(path: string, method = 'GET', body?: object) {
-  const response = await fetch(`/api/hr${path}`, { method, headers: { Authorization: `Bearer ${token()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  const response = await fetch(apiUrl(`/hr${path}`), { method, headers: { Authorization: `Bearer ${token()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   const text = await response.text(); const data = text ? JSON.parse(text) : {}
   if (!response.ok) throw new Error(data.message || 'Unable to update the workforce record.')
   return data
