@@ -1,0 +1,98 @@
+/* A late, shared emphasis layer: same PulseAI palette, clearer operational hierarchy. */
+:root {
+  caret-color: var(--pulse-teal);
+}
+
+button { transition: background-color .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease, transform .16s ease; }
+button:active:not(:disabled) { transform: translateY(1px); }
+
+.auth-page { background: #f4f7f8; }
+.brand-panel { isolation: isolate; background: #0c2944; }
+.brand-panel::before { content: ''; position: absolute; z-index: -1; width: min(58vw, 720px); height: min(58vw, 720px); right: -26%; bottom: -36%; border: 1px solid rgba(135,215,200,.24); border-radius: 50%; }
+.brand-panel::after { content: ''; position: absolute; z-index: -1; width: min(38vw, 460px); height: min(38vw, 460px); right: -9%; bottom: -21%; border: 1px solid rgba(135,215,200,.14); border-radius: 50%; }
+.brand-copy h1 { max-width: 8ch; font-weight: 800; }
+.brand-copy em { color: #a7eadb; }
+.pulse-mark { box-shadow: 0 7px 18px rgba(3,21,37,.22); }
+.role-card { min-height: 64px; border-radius: 8px; }
+.role-card.selected { border-color: #176e65; background: #eaf7f4; box-shadow: inset 0 0 0 1px #176e65, 0 8px 18px rgba(16,87,79,.08); }
+.workspace-card { border-color: #a9cfc6; background: #edf7f4; }
+.primary-button { font-weight: 800; letter-spacing: .005em; box-shadow: 0 7px 15px rgba(16,87,79,.18); }
+.github-button { font-weight: 700; }
+
+.employee-sidebar, .finance-sidebar, .director-sidebar { background: #0c2944; }
+.employee-sidebar nav button, .finance-sidebar nav button, .director-sidebar nav button { position: relative; }
+.employee-sidebar nav button.active, .finance-sidebar nav button.active, .director-sidebar nav button.active { background: #1b4665; box-shadow: inset 3px 0 0 #8ee5ce; }
+.employee-sidebar nav button.active::after, .finance-sidebar nav button.active::after, .director-sidebar nav button.active::after { content: ''; position: absolute; right: 10px; width: 5px; height: 5px; border-radius: 50%; background: #8ee5ce; }
+.employee-header, .finance-header, .content-header { position: relative; }
+.employee-header h1, .finance-header h1, .content-header h1 { font-weight: 800; letter-spacing: -.035em; }
+.employee-header::after, .finance-header::after, .content-header::after { content: ''; position: absolute; left: 0; bottom: -1px; width: 58px; height: 2px; background: var(--employee-teal, var(--f-teal, var(--ops-teal))); }
+
+.employee-status, .finance-pipeline, .billing-cycle { border-color: #bdced5; }
+.employee-status h2 { font-size: clamp(20px, 2vw, 25px); line-height: 1.15; }
+.employee-primary, .finance-button.primary, .approval-button { font-weight: 800; box-shadow: 0 5px 12px rgba(16,87,79,.16); }
+.employee-primary:hover:not(:disabled), .finance-button.primary:hover:not(:disabled), .approval-button:hover:not(:disabled) { box-shadow: 0 8px 18px rgba(16,87,79,.22); }
+.employee-metrics dd, .finance-metrics dd, .metrics-strip dd, .report-summary dd { font-weight: 800; }
+.employee-section-heading h2, .finance-section-heading h2, .section-heading h2 { font-size: 18px; font-weight: 800; }
+.employee-table-wrap tbody tr:hover td, .finance-table-wrap tbody tr:hover td { background: #edf6f4; }
+.employee-table-wrap th, .finance-table-wrap th { color: #365064; }
+
+.director-content .metrics-strip { border-color: #bdced5; }
+.director-content .metrics-strip > div:first-child dd, .finance-metrics > div:first-child dd { color: #0f695b; }
+.action-ledger .exception-row:first-child { border-top-color: #9fb8bf; }
+.table-action, .finance-link { font-weight: 800; }
+.notification-status { box-shadow: 0 5px 12px rgba(16,43,70,.08); }
+
+/* Motion is reserved for entering an operational surface, opening a drill-down,
+   and marking work that is actually waiting on a person. */
+@keyframes pulseai-surface-ready {
+  from { opacity: .72; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseai-panel-open {
+  from { opacity: .8; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulseai-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulseai-pending {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(154,101,15,0); }
+  45% { box-shadow: 0 0 0 4px rgba(154,101,15,.16); }
+}
+
+.employee-content, .manager-content, .finance-content, .hr-content, .director-content {
+  animation: pulseai-surface-ready .28s cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.panel-overlay { animation: pulseai-scrim-in .16s ease-out both; }
+.department-panel, .approval-panel { animation: pulseai-panel-open .3s cubic-bezier(.16, 1, .3, 1) both; }
+
+@media (hover: hover) {
+  .primary-button:hover:not(:disabled), .employee-primary:hover:not(:disabled), .finance-button.primary:hover:not(:disabled), .approval-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .employee-state.submitted::before, .employee-state.resubmitted::before,
+  .approval-state.submitted::before, .workflow-state.submitted::before,
+  .table-state.progress::before {
+    animation: pulseai-pending 2.8s ease-in-out infinite;
+  }
+}
+
+@media (max-width: 700px) {
+  .brand-panel::before, .brand-panel::after { display: none; }
+  .employee-sidebar nav button.active::after, .finance-sidebar nav button.active::after, .director-sidebar nav button.active::after { right: 50%; top: 3px; transform: translateX(50%); }
+  .employee-header::after, .finance-header::after, .content-header::after { width: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button { transition: background-color .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease; }
+  .employee-content, .manager-content, .finance-content, .hr-content, .director-content,
+  .panel-overlay, .department-panel, .approval-panel { animation: none; }
+}
