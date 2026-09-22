@@ -494,6 +494,12 @@ async function seedHRAccounts() {
   }
 }
 
+app.get('/', (_req, res) => res.status(200).json({
+  service: 'PulseAI API',
+  status: 'ok',
+  message: 'PulseAI backend is running',
+}))
+
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'Pulse AI API' }))
 
 type AuthenticatedRequest = Request & { actor?: { id: number; role: Role; email: string } }
