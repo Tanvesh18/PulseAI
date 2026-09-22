@@ -33,6 +33,7 @@ const githubClientSecret = process.env.GITHUB_CLIENT_SECRET
 const githubCallbackUrl = process.env.GITHUB_CALLBACK_URL || `http://localhost:${port}/api/auth/github/callback`
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173'
 const railwayDatabase = Boolean(process.env.MYSQLHOST || process.env.MYSQLDATABASE)
+const dbSsl = process.env.DB_SSL?.toLowerCase() === 'true'
 const validRoles = new Set<Role>(['employee', 'manager', 'hr', 'director', 'finance'])
 
 if (!jwtSecret) throw new Error('JWT_SECRET is required. Copy backend/.env.example to backend/.env and set it.')
@@ -48,6 +49,7 @@ const baseDbConfig = {
   port: Number(process.env.DB_PORT || process.env.MYSQLPORT || 3306),
   user: process.env.DB_USER || process.env.MYSQLUSER || 'root',
   password: process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '',
+  ...(dbSsl ? { ssl: { rejectUnauthorized: false } } : {}),
 }
 
 const publicUser = (user: Pick<UserRecord, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>) => ({
