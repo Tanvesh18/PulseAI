@@ -13,11 +13,11 @@ import { EmployeeDashboard } from './EmployeeDashboard'
 import { ManagerDashboard } from './ManagerDashboard'
 import { FinanceDashboard } from './FinanceDashboard'
 import { HRDashboard } from './HRDashboard'
-import { Banknote, ClipboardCheck, Eye, EyeOff, GitBranch, LockKeyhole, ShieldCheck, UserCog, UserRound } from 'lucide-react'
+import { Banknote, ClipboardCheck, Eye, EyeOff, LockKeyhole, ShieldCheck, UserCog, UserRound } from 'lucide-react'
 
 type Role = 'employee' | 'manager' | 'hr' | 'director' | 'finance'
 type User = { name: string; email: string; role: Role; avatarUrl?: string | null }
-const Github = GitBranch
+const Github = ({ size = 18 }: { size?: number }) => <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.18c-3.22.7-3.9-1.36-3.9-1.36-.53-1.34-1.3-1.7-1.3-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.57-.29-5.27-1.29-5.27-5.74 0-1.27.45-2.3 1.19-3.11-.12-.29-.52-1.47.11-3.07 0 0 .97-.31 3.17 1.19a10.94 10.94 0 0 1 5.77 0c2.2-1.5 3.17-1.19 3.17-1.19.63 1.6.23 2.78.11 3.07.74.81 1.19 1.84 1.19 3.11 0 4.46-2.71 5.45-5.29 5.74.42.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z" /></svg>
 
 declare global { interface Window { google?: { accounts: { id: { initialize: (config: { client_id: string; callback: (response: { credential: string }) => void }) => void; renderButton: (element: HTMLElement, options: Record<string, string | number>) => void } } } } }
 

@@ -63,11 +63,11 @@
 
   .form-panel {
     align-content: center;
-    padding: 20px clamp(44px, 7vw, 132px);
+    padding: 20px clamp(28px, 4vw, 72px);
   }
 
   .form-shell {
-    width: min(100%, 560px);
+    width: min(100%, 520px);
   }
 
   .form-shell header > p:last-child {

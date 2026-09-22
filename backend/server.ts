@@ -327,7 +327,7 @@ async function initializeDatabase() {
   await pool.query("UPDATE timesheets t JOIN employees e ON e.id = t.employee_id SET t.assigned_manager_user_id = e.manager_user_id WHERE t.assigned_manager_user_id IS NULL AND e.manager_user_id IS NOT NULL AND t.status IN ('submitted','resubmitted','approved','returned')").catch(() => undefined)
   await seedHRAccounts()
   await seedFinanceAccounts()
-  if (process.env.SEED_DEMO_DATA === 'true') { await seedDemoData(); await seedDemoBillingCycle(); await seedDemoApprovals(); await seedEmployeeWorkspaceData() }
+  if (process.env.SEED_DEMO_DATA === 'true') { await seedDemoData(); await seedDemoEmployeeAccount(); await seedDemoBillingCycle(); await seedDemoApprovals(); await seedEmployeeWorkspaceData() }
 }
 
 async function seedDemoData() {
@@ -357,6 +357,25 @@ async function seedDemoData() {
   await pool.query('INSERT INTO audit_events (actor_name, action, target) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)', ['Meera Iyer', 'Approved timesheet', 'Aarav Sharma - September 2026', 'Ritu Shah', 'Rejected timesheet', 'Isha Verma - missing project allocation', 'System', 'Created reminder', '2 employees have not submitted September timesheets'])
   await pool.query('INSERT INTO notifications (title, message, notification_type) VALUES (?, ?, ?), (?, ?, ?)', ['2 timesheets are overdue', 'Arjun Singh and Simran Kaur have not submitted September timesheets.', 'critical', 'Three exceptions need review', 'Low hours and a rejected submission require follow-up.', 'warning'])
   console.log('Seeded Pulse AI Director demo data.')
+}
+
+async function seedDemoEmployeeAccount() {
+  const name = String(process.env.EMPLOYEE_1_NAME || '').trim()
+  const email = String(process.env.EMPLOYEE_1_EMAIL || '').trim().toLowerCase()
+  const password = String(process.env.EMPLOYEE_1_PASSWORD || '')
+  if (!name || !email || !password) return
+  const [[employee]] = await pool.query<RowDataPacket[]>('SELECT id FROM employees WHERE LOWER(email) = LOWER(?) AND active = TRUE LIMIT 1', [email])
+  if (!employee) { console.warn(`Demo employee account skipped: ${email} is not in the active employee roster.`); return }
+  const passwordHash = await bcrypt.hash(password, 10)
+  const [[existing]] = await pool.query<RowDataPacket[]>('SELECT id FROM users WHERE email = ? LIMIT 1', [email])
+  let userId = Number(existing?.id || 0)
+  if (userId) await pool.query('UPDATE users SET name = ?, password_hash = ?, role = \'employee\', auth_provider = \'password\' WHERE id = ?', [name, passwordHash, userId])
+  else {
+    const [created] = await pool.query<ResultSetHeader>('INSERT INTO users (name, email, password_hash, role, auth_provider) VALUES (?, ?, ?, \'employee\', \'password\')', [name, email, passwordHash])
+    userId = created.insertId
+  }
+  await pool.query('UPDATE employees SET user_id = ? WHERE id = ?', [userId, employee.id])
+  console.log(`Synchronized demo Employee account: ${email}`)
 }
 
 async function seedDemoBillingCycle() {
@@ -709,6 +728,21 @@ async function missingWorkdays(employeeId: number, period: RowDataPacket, timesh
     if (isWeekday(day) && !holidayDates.has(day) && !onLeave && !entryDates.has(day)) missing.push(day)
   }
   return missing
+}
+
+async function directorMissingWorkdayExceptions(period: RowDataPacket) {
+  const [members] = await pool.query<RowDataPacket[]>(`SELECT e.id, e.name, e.employee_code AS employeeCode, d.name AS department, t.id AS timesheetId, t.status,
+    (SELECT COUNT(*) FROM timesheet_entries te WHERE te.timesheet_id = t.id) AS entryCount
+    FROM employees e JOIN departments d ON d.id = e.department_id LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ?
+    WHERE e.active = TRUE ORDER BY e.name`, [period.id])
+  const exceptions: any[] = []
+  for (const member of members) {
+    const shouldCheckDays = !member.timesheetId || member.status === 'draft' || Number(member.entryCount) > 0
+    if (!shouldCheckDays) continue
+    const days = await missingWorkdays(Number(member.id), period, member.timesheetId ? Number(member.timesheetId) : null)
+    if (days.length) exceptions.push({ id: `missing-${member.id}`, severity: 'warning', finding_type: 'missing_workdays', type: 'missing_workdays', message: `${days.length} scheduled workday(s) have no recorded time after excluding approved leave and active holidays.`, employeeName: member.name, employeeCode: member.employeeCode, department: member.department, hours: null, status: member.status || 'not_started', resolved: false })
+  }
+  return exceptions
 }
 
 function managerTitleFor(status: string) { return status === 'resubmitted' ? 'Timesheet resubmitted' : 'Timesheet submitted' }
@@ -1189,13 +1223,23 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
     const [[employeeCount]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS value FROM employees WHERE active = TRUE')
     const [[submittedCount]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) AS value FROM timesheets WHERE reporting_period_id = ? AND status IN ('submitted', 'resubmitted')", [period.id])
     const [[approvedCount]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) AS value FROM timesheets WHERE reporting_period_id = ? AND status = 'approved'", [period.id])
+    const [[hoursSummary]] = await pool.query<RowDataPacket[]>(`SELECT COALESCE(SUM(total_hours), 0) AS totalHours,
+      COALESCE(SUM(CASE WHEN status = 'approved' THEN total_hours ELSE 0 END), 0) AS approvedHours,
+      COUNT(CASE WHEN status IN ('submitted', 'resubmitted', 'returned', 'approved') THEN 1 END) AS completedCount
+      FROM timesheets WHERE reporting_period_id = ?`, [period.id])
     const [[exceptionCount]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS value FROM validation_findings f JOIN timesheets t ON t.id = f.timesheet_id WHERE f.resolved = FALSE AND t.reporting_period_id = ?', [period.id])
     const [workforcePosition] = await pool.query<RowDataPacket[]>(`SELECT e.id,e.name,e.employee_code AS employeeCode,d.name AS department,t.id AS timesheetId,t.status,
       (SELECT COUNT(*) FROM timesheet_entries te WHERE te.timesheet_id=t.id) AS entryCount
       FROM employees e JOIN departments d ON d.id = e.department_id LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ? WHERE e.active = TRUE ORDER BY e.name`, [period.id])
     let pendingValue = 0; let missingWorkdayValue = 0
+    const timesheetDistribution = { draft: 0, submitted: 0, returned: 0, approved: 0 }
     const missingWorkdayExceptions: any[] = []
     for (const member of workforcePosition) {
+      const status = String(member.status || 'draft')
+      if (status === 'approved') timesheetDistribution.approved++
+      else if (status === 'returned' || status === 'rejected') timesheetDistribution.returned++
+      else if (status === 'submitted' || status === 'resubmitted') timesheetDistribution.submitted++
+      else timesheetDistribution.draft++
       if (['submitted','resubmitted','returned'].includes(String(member.status))) pendingValue++
       const shouldCheckDays = !member.timesheetId || member.status === 'draft' || Number(member.entryCount) > 0
       if (shouldCheckDays) {
@@ -1219,7 +1263,7 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
     exceptions.push(...missingWorkdayExceptions.slice(0, Math.max(0, 5 - exceptions.length)))
     const [notifications] = await pool.query<RowDataPacket[]>('SELECT id, title, message, notification_type AS type, read_at AS readAt, created_at AS createdAt FROM notifications WHERE read_at IS NULL AND (recipient_email = ? OR recipient_email IS NULL) ORDER BY created_at DESC LIMIT 5', [req.actor!.email])
     const [billingCycles] = await pool.query<RowDataPacket[]>('SELECT period_label AS periodLabel, starts_on AS startsOn, ends_on AS endsOn, submission_deadline AS submissionDeadline, current_stage AS currentStage FROM billing_cycles ORDER BY starts_on DESC LIMIT 1')
-    return res.json({ period: period.label, billingCycle: billingCycles[0] || null, metrics: { employees: employeeCount?.value || 0, submitted: submittedCount?.value || 0, approved: approvedCount?.value || 0, pending: pendingValue, missingWorkdays: missingWorkdayValue, exceptions: Number(exceptionCount?.value || 0) + missingWorkdayExceptions.length }, departments, exceptions, notifications })
+    return res.json({ period: period.label, billingCycle: billingCycles[0] || null, metrics: { employees: Number(employeeCount?.value || 0), submitted: Number(submittedCount?.value || 0), approved: Number(approvedCount?.value || 0), pending: pendingValue, missingWorkdays: missingWorkdayValue, exceptions: Number(exceptionCount?.value || 0) + missingWorkdayExceptions.length, totalHours: Number(hoursSummary?.totalHours || 0), approvedHours: Number(hoursSummary?.approvedHours || 0), completedCount: Number(hoursSummary?.completedCount || 0), timesheetDistribution }, departments, exceptions, notifications })
   } catch (error) { next(error) }
 })
 
@@ -1230,7 +1274,8 @@ app.get('/api/director/exceptions', requireDirector, async (_req: AuthenticatedR
     const [rows] = await pool.query<RowDataPacket[]>(`SELECT v.id, v.severity, v.finding_type AS type, v.message, v.resolved, e.name AS employeeName, e.employee_code AS employeeCode, d.name AS department, t.total_hours AS hours, t.status
       FROM validation_findings v JOIN timesheets t ON t.id = v.timesheet_id JOIN employees e ON e.id = t.employee_id JOIN departments d ON d.id = e.department_id
       WHERE v.resolved = FALSE AND t.reporting_period_id = ? ORDER BY FIELD(v.severity, 'critical', 'warning'), e.name`, [period.id])
-    return res.json({ exceptions: rows })
+    const missingWorkdayExceptions = await directorMissingWorkdayExceptions(period)
+    return res.json({ exceptions: [...rows, ...missingWorkdayExceptions] })
   } catch (error) { next(error) }
 })
 
@@ -1344,8 +1389,38 @@ app.post('/api/director/approvals/:id/return', requireDirector, async (req: Auth
 
 app.get('/api/director/audit-events', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
   try {
-    const [events] = await pool.query<RowDataPacket[]>('SELECT id, actor_name AS actor, action, target, created_at AS createdAt FROM audit_events ORDER BY created_at DESC LIMIT 30')
-    return res.json({ events })
+    const search = String(_req.query.search || '').trim()
+    const role = String(_req.query.role || '').trim()
+    const entity = String(_req.query.entity || '').trim()
+    const requestedPage = Number(_req.query.page || 1)
+    const requestedPageSize = Number(_req.query.pageSize || 20)
+    const pageSize = Number.isInteger(requestedPageSize) ? Math.min(Math.max(requestedPageSize, 10), 50) : 20
+    const page = Number.isInteger(requestedPage) ? Math.max(requestedPage, 1) : 1
+    const auditSource = `SELECT id, CONVERT(actor_name USING utf8mb4) COLLATE utf8mb4_unicode_ci AS actor, actor_user_id AS actorUserId,
+      CONVERT(actor_role USING utf8mb4) COLLATE utf8mb4_unicode_ci AS actorRole, CONVERT(action USING utf8mb4) COLLATE utf8mb4_unicode_ci AS action,
+      CONVERT(target USING utf8mb4) COLLATE utf8mb4_unicode_ci AS target, CONVERT(entity_type USING utf8mb4) COLLATE utf8mb4_unicode_ci AS entityType,
+      entity_id AS entityId, before_state AS beforeState, after_state AS afterState, created_at AS createdAt
+      FROM audit_events
+      UNION ALL
+      SELECT 1000000000 + a.id AS id, CONVERT(COALESCE(u.name, u.email, 'Unknown') USING utf8mb4) COLLATE utf8mb4_unicode_ci AS actor,
+        a.actor_user_id AS actorUserId, CONVERT(u.role USING utf8mb4) COLLATE utf8mb4_unicode_ci AS actorRole,
+        CONVERT(CONCAT('Timesheet ', REPLACE(a.event_type, '_', ' ')) USING utf8mb4) COLLATE utf8mb4_unicode_ci AS action,
+        CONVERT(CONCAT(e.name, ' · ', t.period_label) USING utf8mb4) COLLATE utf8mb4_unicode_ci AS target,
+        CONVERT('timesheet' USING utf8mb4) COLLATE utf8mb4_unicode_ci AS entityType, t.id AS entityId, NULL AS beforeState,
+        JSON_OBJECT('eventType', a.event_type, 'detail', a.detail) AS afterState, a.created_at AS createdAt
+      FROM timesheet_audit_events a JOIN timesheets t ON t.id = a.timesheet_id JOIN employees e ON e.id = t.employee_id
+      LEFT JOIN users u ON u.id = a.actor_user_id`
+    const conditions: string[] = []
+    const values: unknown[] = []
+    if (search) { conditions.push(`LOWER(CONCAT_WS(' ', events.actor, events.action, events.target)) LIKE ?`); values.push(`%${search.toLowerCase()}%`) }
+    if (role) { conditions.push('events.actorRole = ?'); values.push(role) }
+    if (entity) { conditions.push('events.entityType = ?'); values.push(entity) }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''
+    const [[totalRow]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM (${auditSource}) events${where}`, values)
+    const offset = (page - 1) * pageSize
+    const [events] = await pool.query<RowDataPacket[]>(`SELECT * FROM (${auditSource}) events${where} ORDER BY events.createdAt DESC LIMIT ? OFFSET ?`, [...values, pageSize, offset])
+    const total = Number(totalRow?.total || 0)
+    return res.json({ events, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } })
   } catch (error) { next(error) }
 })
 

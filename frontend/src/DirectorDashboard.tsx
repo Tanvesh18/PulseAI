@@ -3,11 +3,18 @@ import './director.css'
 import './director-refine.css'
 import './director-ops.css'
 import './director-metrics.css'
+import './audit.css'
+import './director-overview.css'
 import { AlertTriangle, Bell, Check, CircleAlert, ClipboardCheck, Clock3, FileClock, Flag, Info, LayoutDashboard, LogOut, type LucideIcon, X } from 'lucide-react'
 import { transitionWorkspace } from './viewTransition'
+import { AuditWorkspace } from './AuditWorkspace'
+import { DirectorOverview } from './DirectorOverview'
 
 type User = { name: string; email: string; role: 'director' }
 type Tab = 'overview' | 'approvals' | 'exceptions' | 'reports' | 'audit'
+type AuditFilters = { search: string; role: string; entity: string }
+void Audit
+void LegacyOverview
 const api = (path: string, token: string) => fetch(`/api/director${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
   const data = await response.json()
   if (!response.ok) throw new Error(data.message || 'Unable to load data.')
@@ -23,30 +30,40 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   const [tab, setTab] = useState<Tab>('overview')
   const [dashboard, setDashboard] = useState<any>(null)
   const [financial, setFinancial] = useState<any>(null)
+  const [recentAudit, setRecentAudit] = useState<any[]>([])
   const [data, setData] = useState<any>(null)
   const [selectedDepartment, setSelectedDepartment] = useState<any>(null)
   const [selectedApproval, setSelectedApproval] = useState<any>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState('')
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({ search: '', role: '', entity: '' })
+  const [auditPage, setAuditPage] = useState(1)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const token = localStorage.getItem('pulseai_token') || ''
 
-  const loadDashboard = useCallback(() => Promise.all([api('/dashboard', token), api('/financial-report', token)]).then(([result, financialResult]) => { setDashboard(result); setFinancial(financialResult); setError('') }).catch((err) => setError(err.message)), [token])
+  const loadDashboard = useCallback(() => Promise.all([api('/dashboard', token), api('/financial-report', token), api('/audit-events?page=1&pageSize=5', token)]).then(([result, financialResult, auditResult]) => { setDashboard(result); setFinancial(financialResult); setRecentAudit(auditResult.events || []); setError('') }).catch((err) => setError(err.message)), [token])
   useEffect(() => { loadDashboard() }, [loadDashboard])
   useEffect(() => {
     if (tab === 'overview') return
     const routes: Record<Exclude<Tab, 'overview'>, string> = { approvals: '/approvals', exceptions: '/exceptions', reports: '/reports', audit: '/audit-events' }
-    const request = tab === 'reports'
+    const auditParams = new URLSearchParams({ page: String(auditPage), pageSize: '20' })
+    if (auditFilters.search) auditParams.set('search', auditFilters.search)
+    if (auditFilters.role) auditParams.set('role', auditFilters.role)
+    if (auditFilters.entity) auditParams.set('entity', auditFilters.entity)
+    const request = tab === 'audit'
+      ? api(`/audit-events?${auditParams.toString()}`, token)
+      : tab === 'reports'
       ? Promise.all([api(routes[tab], token), api('/financial-report', token)]).then(([report, financial]) => ({ ...report, financial }))
       : api(routes[tab], token)
     request.then((result) => { setData({ ...result, view: tab }); setError('') }).catch((err) => setError(err.message))
-  }, [tab, token])
+  }, [tab, token, auditFilters, auditPage])
 
   const openDepartment = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; const result = await api(`/departments/${id}`, token); transitionWorkspace(() => setSelectedDepartment(result)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open department.') } }
   const closeDepartment = () => { transitionWorkspace(() => setSelectedDepartment(null)); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
   const openApproval = async (id: number, trigger: HTMLElement) => { try { returnFocusRef.current = trigger; const result = await api(`/approvals/${id}`, token); transitionWorkspace(() => setSelectedApproval(result)) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to open submission.') } }
   const closeApproval = () => { transitionWorkspace(() => setSelectedApproval(null)); window.requestAnimationFrame(() => returnFocusRef.current?.focus()) }
   const decideApproval = async (id: number, decision: 'approve' | 'return', reason?: string) => { setActionLoading(true); try { await apiAction(`/approvals/${id}/${decision}`, token, reason ? { reason } : undefined); closeApproval(); const result = await api('/approvals', token); setData({ ...result, view: 'approvals' }); loadDashboard() } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update the submission.') } finally { setActionLoading(false) } }
+  const updateAuditFilters = (next: Partial<AuditFilters>) => { setAuditFilters(current => ({ ...current, ...next })); setAuditPage(1) }
   const metrics = dashboard?.metrics || {}
   const tabLoading = tab !== 'overview' && data?.view !== tab
   const nav: Array<[Tab, string, LucideIcon]> = [['overview', 'Overview', LayoutDashboard], ['approvals', 'Approvals', ClipboardCheck], ['exceptions', 'Exceptions', AlertTriangle], ['reports', 'Reports', Flag], ['audit', 'Audit trail', Clock3]]
@@ -59,12 +76,12 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
     <section className="director-content"><header className="content-header"><div><h1>{tab === 'overview' ? 'Executive overview' : tab[0].toUpperCase() + tab.slice(1)}</h1><p className="header-subtitle">{dashboard?.period || 'Current reporting period'} snapshot</p></div><button type="button" className="notification-status" onClick={() => document.getElementById('director-notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} aria-label={`Jump to ${dashboard?.notifications?.length || 0} unread notifications`}><Bell size={18} /><span>{dashboard?.notifications?.length || 0}</span></button></header>
       {error && <div className="director-error"><span>{error}</span><button onClick={loadDashboard}>Try again</button></div>}
       {!dashboard && !error && <div className="director-loading">Loading your organization workspace…</div>}
-      {tab === 'overview' && dashboard && <Overview dashboard={dashboard} financial={financial} onDepartment={openDepartment} onNavigate={(nextTab) => transitionWorkspace(() => setTab(nextTab))} />}
+      {tab === 'overview' && dashboard && <DirectorOverview dashboard={dashboard} financial={financial} auditEvents={recentAudit} onDepartment={openDepartment} onNavigate={(nextTab) => transitionWorkspace(() => setTab(nextTab))} />}
       {tab !== 'overview' && tabLoading && <div className="director-loading">Loading {tab}…</div>}
       {tab === 'approvals' && !tabLoading && <Approvals rows={data?.submissions || []} onOpen={openApproval} />}
       {tab === 'exceptions' && !tabLoading && <Exceptions rows={data?.exceptions || []} />}
       {tab === 'reports' && !tabLoading && <Reports data={data} onDepartment={openDepartment} />}
-      {tab === 'audit' && !tabLoading && <Audit events={data?.events || []} />}
+      {tab === 'audit' && !tabLoading && <AuditWorkspace data={data} filters={auditFilters} onFilter={updateAuditFilters} onPage={setAuditPage} />}
       {selectedDepartment && <DepartmentPanel data={selectedDepartment} onClose={closeDepartment} />}
       {selectedApproval && <ApprovalPanel data={selectedApproval} loading={actionLoading} onClose={closeApproval} onDecision={decideApproval} />}
     </section>
@@ -102,7 +119,7 @@ function LiveMetric({ value, decimals = 0 }: { value: number | string | null | u
   return <span className={`live-metric${updating ? ' is-updating' : ''}`}>{displayValue.toFixed(decimals)}</span>
 }
 
-function Overview({ dashboard, financial, onDepartment, onNavigate }: { dashboard: any; financial: any; onDepartment: (id: number, trigger: HTMLElement) => void; onNavigate: (tab: Tab) => void }) {
+function LegacyOverview({ dashboard, financial, onDepartment, onNavigate }: { dashboard: any; financial: any; onDepartment: (id: number, trigger: HTMLElement) => void; onNavigate: (tab: Tab) => void }) {
   const metrics: Array<[string, number]> = [['Active employees', dashboard.metrics.employees], ['Approved', dashboard.metrics.approved], ['Awaiting action', dashboard.metrics.pending], ['Missing workdays', dashboard.metrics.missingWorkdays || 0], ['Open exceptions', dashboard.metrics.exceptions]]
   return <>{dashboard.billingCycle && <BillingCycle cycle={dashboard.billingCycle} />}<dl className="metrics-strip">{metrics.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><LiveMetric value={value} /></dd></div>)}</dl>
     <OperationsMap metrics={dashboard.metrics} financial={financial} onNavigate={onNavigate} />
