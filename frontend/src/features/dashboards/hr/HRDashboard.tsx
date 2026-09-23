@@ -4,6 +4,7 @@ import { apiUrl, handleUnauthorized } from '../../../api/client'
 import { CalendarDays, LogOut, Users, UserCog } from 'lucide-react'
 import '../shared/employee.css'
 import './hr.css'
+import logo from '../../../assets/logo.png'
 
 type User = { name: string; email: string; role: 'hr' }
 type Tab = 'workforce' | 'leave' | 'calendar'
@@ -29,7 +30,7 @@ export function HRDashboard({ user, onSignOut }: { user: User; onSignOut: () => 
   const addLeave = (event: FormEvent) => { event.preventDefault(); void save(async () => { await api('/leave', 'POST', { ...leave, employeeId: Number(leave.employeeId) }); setLeave({ employeeId: '', startsOn: '', endsOn: '', leaveType: 'Annual leave', sourceReference: '' }) }, 'Approved leave added to the shared work calendar.') }
   const addHoliday = (event: FormEvent) => { event.preventDefault(); void save(async () => { await api('/holidays', 'POST', holiday); setHoliday({ holidayDate: '', name: '', region: 'default' }) }, 'Holiday added to the shared calendar.') }
   const title = tab === 'workforce' ? 'Workforce' : tab === 'leave' ? 'Leave records' : 'Holiday calendar'
-  return <main className="employee-app hr-app"><aside className="employee-sidebar"><div className="employee-logo"><span>P</span> pulse<span>AI</span></div><p>HR WORKSPACE</p><nav>{([['workforce', 'Workforce', Users], ['leave', 'Leave', CalendarDays], ['calendar', 'Holidays', UserCog]] as const).map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={17} />{label}</button>)}</nav><div className="employee-user"><span>{user.name[0]}</span><div><strong>{user.name}</strong><small>Human Resources</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div></aside>
+  return <main className="employee-app hr-app"><aside className="employee-sidebar"><div className="employee-logo"><img src={logo} alt="" /> pulse<span>AI</span></div><p>HR WORKSPACE</p><nav>{([['workforce', 'Workforce', Users], ['leave', 'Leave', CalendarDays], ['calendar', 'Holidays', UserCog]] as const).map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={17} />{label}</button>)}</nav><div className="employee-user"><span>{user.name[0]}</span><div><strong>{user.name}</strong><small>Human Resources</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div></aside>
     <section className="employee-content"><header className="employee-header"><div><h1>{title}</h1><p>Shared workforce data for Employee, Manager, and Director workflows</p></div></header>
       {message && <div className="employee-message" role="status">{message}<button onClick={() => setMessage('')} aria-label="Dismiss message">×</button></div>}{error && <div className="employee-message hr-error" role="alert">{error}<button onClick={() => { setError(''); void load() }}>Try again</button></div>}
       {!data ? <p className="employee-loading">Loading workforce records…</p> : <><dl className="hr-metrics"><div><dt>Workforce records</dt><dd>{data.summary.employees || 0}</dd></div><div><dt>Active</dt><dd>{data.summary.activeEmployees || 0}</dd></div><div><dt>Inactive</dt><dd>{data.summary.inactiveEmployees || 0}</dd></div></dl>

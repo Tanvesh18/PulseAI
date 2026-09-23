@@ -9,6 +9,7 @@ import { AlertTriangle, Bell, ClipboardCheck, Clock3, Flag, LayoutDashboard, Log
 import { transitionWorkspace } from '../../../utils/viewTransition'
 import { AuditWorkspace } from './AuditWorkspace'
 import { DirectorOverview } from './DirectorOverview'
+import logo from '../../../assets/logo.png'
 
 type User = { name: string; email: string; role: 'director' }
 type Tab = 'overview' | 'approvals' | 'exceptions' | 'reports' | 'audit'
@@ -69,7 +70,7 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   const nav: Array<[Tab, string, LucideIcon]> = [['overview', 'Overview', LayoutDashboard], ['approvals', 'Approvals', ClipboardCheck], ['exceptions', 'Exceptions', AlertTriangle], ['reports', 'Reports', Flag], ['audit', 'Audit trail', Clock3]]
 
   return <main className={`director-app director-tab-${tab}`}>
-    <aside className="director-sidebar"><div className="director-logo"><span>P</span> pulse<span>AI</span></div><p className="workspace-label">DIRECTOR WORKSPACE</p>
+    <aside className="director-sidebar"><div className="director-logo"><img src={logo} alt="" /> pulse<span>AI</span></div><p className="workspace-label">DIRECTOR WORKSPACE</p>
       <nav>{nav.map(([id, label, Icon]) => <button className={tab === id ? 'active' : ''} onClick={() => transitionWorkspace(() => { setTab(id); setSelectedDepartment(null) })} key={id}><b><Icon size={17} /></b>{label}{id === 'exceptions' && metrics.exceptions > 0 && <i><LiveMetric value={metrics.exceptions} /></i>}</button>)}</nav>
       <div className="sidebar-footer"><div className="avatar">{user.name[0]}</div><div><strong>{user.name}</strong><small>Director</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div>
     </aside>
