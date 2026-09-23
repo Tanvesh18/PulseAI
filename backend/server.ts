@@ -332,7 +332,14 @@ async function initializeDatabase() {
   await pool.query("UPDATE timesheets t JOIN employees e ON e.id = t.employee_id SET t.assigned_manager_user_id = e.manager_user_id WHERE t.assigned_manager_user_id IS NULL AND e.manager_user_id IS NOT NULL AND t.status IN ('submitted','resubmitted','approved','returned')").catch(() => undefined)
   await seedHRAccounts()
   await seedFinanceAccounts()
-  if (process.env.SEED_DEMO_DATA === 'true') { await seedDemoData(); await seedDemoEmployeeAccount(); await seedDemoBillingCycle(); await seedDemoApprovals(); await seedEmployeeWorkspaceData() }
+  if (process.env.SEED_DEMO_DATA === 'true') {
+    await seedDemoData()
+    await seedDemoEmployeeAccount()
+    await seedDemoBillingCycle()
+    await seedDemoApprovals()
+    await seedEmployeeWorkspaceData()
+    await seedDemoTimesheetDetails()
+  }
 }
 
 async function seedDemoData() {
@@ -414,6 +421,50 @@ async function seedEmployeeWorkspaceData() {
   const [projectActivities] = await pool.query<RowDataPacket[]>("SELECT id FROM activities WHERE active = TRUE AND category = 'project'")
   for (const employee of employees) for (const project of projects) await pool.query('INSERT IGNORE INTO employee_project_assignments (employee_id, project_id, active) VALUES (?, ?, TRUE)', [employee.id, project.id])
   for (const project of projects) for (const activity of projectActivities) await pool.query('INSERT IGNORE INTO project_activity_assignments (project_id, activity_id, active, created_by_user_id) SELECT ?, ?, TRUE, id FROM users WHERE role = ? ORDER BY id LIMIT 1', [project.id, activity.id, 'director'])
+}
+
+async function seedDemoTimesheetDetails() {
+  await pool.query(`UPDATE employees e JOIN users u ON u.role = 'manager' AND u.name = e.manager_name
+    SET e.manager_user_id = u.id WHERE e.email LIKE '%@emerson.demo' AND e.manager_user_id IS NULL`)
+  await pool.query(`UPDATE timesheets t JOIN employees e ON e.id = t.employee_id
+    SET t.assigned_manager_user_id = e.manager_user_id
+    WHERE e.email LIKE '%@emerson.demo' AND e.manager_user_id IS NOT NULL
+      AND t.status IN ('submitted','resubmitted','approved','returned') AND t.assigned_manager_user_id IS NULL`)
+  await pool.query(`UPDATE timesheets t JOIN employees e ON e.id = t.employee_id
+    SET t.reviewer_user_id = e.manager_user_id
+    WHERE e.email LIKE '%@emerson.demo' AND e.manager_user_id IS NOT NULL
+      AND t.status IN ('approved','returned') AND t.reviewer_user_id IS NULL`)
+
+  await pool.query("INSERT IGNORE INTO activities (name, category, active) VALUES ('Demo delivery work', 'internal', TRUE)")
+  const [[activity]] = await pool.query<RowDataPacket[]>("SELECT id FROM activities WHERE name = 'Demo delivery work' AND category = 'internal' LIMIT 1")
+  if (!activity) return
+
+  const [timesheets] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.total_hours AS totalHours,
+      DATE_FORMAT(r.starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(r.ends_on, '%Y-%m-%d') AS endsOn
+    FROM timesheets t JOIN employees e ON e.id = t.employee_id
+    JOIN reporting_periods r ON r.id = t.reporting_period_id
+    WHERE e.email LIKE '%@emerson.demo' AND t.total_hours > 0`)
+  for (const timesheet of timesheets) {
+    const [[entryCount]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS value FROM timesheet_entries WHERE timesheet_id = ?', [timesheet.id])
+    if (Number(entryCount?.value || 0) > 0) continue
+
+    let remaining = Number(timesheet.totalHours)
+    for (let date = new Date(`${timesheet.startsOn}T00:00:00Z`); date <= new Date(`${timesheet.endsOn}T00:00:00Z`) && remaining > 0; date.setUTCDate(date.getUTCDate() + 1)) {
+      if (date.getUTCDay() === 0 || date.getUTCDay() === 6) continue
+      const hours = Math.min(8, remaining)
+      await pool.query(`INSERT INTO timesheet_entries (timesheet_id, entry_date, project_id, activity_id, hours, work_description)
+        VALUES (?, ?, NULL, ?, ?, 'Seeded demo timesheet entry')`, [timesheet.id, date.toISOString().slice(0, 10), activity.id, hours])
+      remaining = Math.round((remaining - hours) * 100) / 100
+    }
+    await syncTimesheetTotal(Number(timesheet.id))
+  }
+
+  await pool.query(`INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail, created_at)
+    SELECT t.id, t.reviewer_user_id, 'approved', 'Demo sample approval', COALESCE(t.approved_at, t.updated_at)
+    FROM timesheets t JOIN employees e ON e.id = t.employee_id
+    WHERE e.email LIKE '%@emerson.demo' AND t.status = 'approved' AND t.reviewer_user_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM timesheet_audit_events a WHERE a.timesheet_id = t.id AND a.event_type = 'approved')`)
+  console.log('Synchronized demo timesheet entries and review history.')
 }
 
 async function seedDirectorAccounts() {
