@@ -348,18 +348,19 @@ async function seedDemoData() {
   const employees = [
     ['E101', 'Aarav Sharma', 'aarav@emerson.demo', 'ENG', 'Meera Iyer', 168, 'approved'], ['E102', 'Priya Nair', 'priya@emerson.demo', 'ENG', 'Meera Iyer', 160, 'submitted'], ['E103', 'Rohan Gupta', 'rohan@emerson.demo', 'ENG', 'Meera Iyer', 172, 'approved'],
     ['E201', 'Kavya Rao', 'kavya@emerson.demo', 'OPS', 'Dev Malhotra', 167, 'approved'], ['E202', 'Arjun Singh', 'arjun@emerson.demo', 'OPS', 'Dev Malhotra', 0, 'draft'], ['E203', 'Neha Kapoor', 'neha@emerson.demo', 'OPS', 'Dev Malhotra', 148, 'submitted'],
-    ['E301', 'Sanjay Patel', 'sanjay@emerson.demo', 'FIN', 'Ritu Shah', 166, 'approved'], ['E302', 'Isha Verma', 'isha@emerson.demo', 'FIN', 'Ritu Shah', 167, 'rejected'], ['E303', 'Vikram Das', 'vikram@emerson.demo', 'FIN', 'Ritu Shah', 168, 'approved'],
+    ['E301', 'Sanjay Patel', 'sanjay@emerson.demo', 'FIN', 'Ritu Shah', 166, 'approved'], ['E302', 'Isha Verma', 'isha@emerson.demo', 'FIN', 'Ritu Shah', 167, 'returned'], ['E303', 'Vikram Das', 'vikram@emerson.demo', 'FIN', 'Ritu Shah', 168, 'approved'],
     ['E401', 'Ananya Bose', 'ananya@emerson.demo', 'HR', 'Nikhil Roy', 167, 'approved'], ['E402', 'Rahul Jain', 'rahul@emerson.demo', 'HR', 'Nikhil Roy', 120, 'submitted'], ['E403', 'Simran Kaur', 'simran@emerson.demo', 'HR', 'Nikhil Roy', 0, 'draft'],
   ]
   for (const [code, name, email, department, manager, hours, status] of employees) {
     const [employee] = await pool.query<ResultSetHeader>('INSERT INTO employees (employee_code, name, email, department_id, manager_name) VALUES (?, ?, ?, ?, ?)', [code, name, email, departmentId.get(department as string), manager])
     const submittedAt = status === 'draft' ? null : new Date()
-    await pool.query('INSERT INTO timesheets (employee_id, reporting_period_id, period_label, total_hours, status, submitted_at, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [employee.insertId, reportingPeriod.id, 'September 2026', hours, status, submittedAt, status === 'approved' ? new Date() : null])
+    const returnReason = status === 'returned' ? 'Missing project allocation. Please correct and resubmit.' : null
+    await pool.query('INSERT INTO timesheets (employee_id, reporting_period_id, period_label, total_hours, status, submitted_at, approved_at, return_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [employee.insertId, reportingPeriod.id, 'September 2026', hours, status, submittedAt, status === 'approved' ? new Date() : null, returnReason])
   }
   const [timesheets] = await pool.query<RowDataPacket[]>('SELECT t.id, e.employee_code FROM timesheets t JOIN employees e ON e.id = t.employee_id')
   const idFor = new Map(timesheets.map((row) => [row.employee_code as string, row.id as number]))
-  await pool.query('INSERT INTO validation_findings (timesheet_id, severity, finding_type, message) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)', [idFor.get('E203'), 'warning', 'Low hours', '148 hours recorded; review supporting remarks.', idFor.get('E402'), 'critical', 'Low hours', '120 hours recorded; action required before approval.', idFor.get('E302'), 'critical', 'Rejected timesheet', 'Returned for correction: missing project allocation.'])
-  await pool.query('INSERT INTO audit_events (actor_name, action, target) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)', ['Meera Iyer', 'Approved timesheet', 'Aarav Sharma - September 2026', 'Ritu Shah', 'Rejected timesheet', 'Isha Verma - missing project allocation', 'System', 'Created reminder', '2 employees have not submitted September timesheets'])
+  await pool.query('INSERT INTO validation_findings (timesheet_id, severity, finding_type, message) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)', [idFor.get('E203'), 'warning', 'Low hours', '148 hours recorded; review supporting remarks.', idFor.get('E402'), 'critical', 'Low hours', '120 hours recorded; action required before approval.', idFor.get('E302'), 'critical', 'Returned timesheet', 'Returned for correction: missing project allocation.'])
+  await pool.query('INSERT INTO audit_events (actor_name, action, target) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)', ['Meera Iyer', 'Approved timesheet', 'Aarav Sharma - September 2026', 'Ritu Shah', 'Returned timesheet', 'Isha Verma - missing project allocation', 'System', 'Created reminder', '2 employees have not submitted September timesheets'])
   await pool.query('INSERT INTO notifications (title, message, notification_type) VALUES (?, ?, ?), (?, ?, ?)', ['2 timesheets are overdue', 'Arjun Singh and Simran Kaur have not submitted September timesheets.', 'critical', 'Three exceptions need review', 'Low hours and a rejected submission require follow-up.', 'warning'])
   console.log('Seeded Pulse AI Director demo data.')
 }
@@ -448,7 +449,11 @@ async function seedManagerAccounts() {
   }))
   for (const account of accounts) {
     if (account.name.length < 2 || !/^\S+@\S+\.\S+$/.test(account.email) || account.password.length < 8) continue
-    const [existing] = await pool.query<UserRecord[]>('SELECT id FROM users WHERE email = ? LIMIT 1', [account.email])
+    const [existing] = await pool.query<UserRecord[]>('SELECT id, role FROM users WHERE email = ? LIMIT 1', [account.email])
+    if (existing[0] && existing[0].role !== 'manager') {
+      console.warn(`Manager account ${account.email} was not synchronized because that email already belongs to a different role.`)
+      continue
+    }
     const passwordHash = await bcrypt.hash(account.password, 12)
     let userId: number
     if (existing[0]) { userId = existing[0].id; await pool.query('UPDATE users SET name = ?, password_hash = ?, role = ?, auth_provider = ? WHERE id = ?', [account.name, passwordHash, 'manager', 'password', userId]) }
@@ -466,7 +471,11 @@ async function seedFinanceAccounts() {
   }))
   for (const account of accounts) {
     if (account.name.length < 2 || !/^\S+@\S+\.\S+$/.test(account.email) || account.password.length < 8) continue
-    const [existing] = await pool.query<UserRecord[]>('SELECT id FROM users WHERE email = ? LIMIT 1', [account.email])
+    const [existing] = await pool.query<UserRecord[]>('SELECT id, role FROM users WHERE email = ? LIMIT 1', [account.email])
+    if (existing[0] && existing[0].role !== 'finance') {
+      console.warn(`Finance account ${account.email} was not synchronized because that email already belongs to a different role.`)
+      continue
+    }
     const passwordHash = await bcrypt.hash(account.password, 12)
     if (existing[0]) await pool.query('UPDATE users SET name = ?, password_hash = ?, role = ?, auth_provider = ? WHERE id = ?', [account.name, passwordHash, 'finance', 'password', existing[0].id])
     else await pool.query('INSERT INTO users (name, email, password_hash, role, auth_provider) VALUES (?, ?, ?, ?, ?)', [account.name, account.email, passwordHash, 'finance', 'password'])
@@ -1211,6 +1220,52 @@ async function decideManagerTimesheet(req: AuthenticatedRequest, res: Response, 
 app.post('/api/manager/timesheets/:id/approve', requireManager, (req: AuthenticatedRequest, res, next) => decideManagerTimesheet(req, res, 'approved').catch(next))
 app.post('/api/manager/timesheets/:id/return', requireManager, (req: AuthenticatedRequest, res, next) => decideManagerTimesheet(req, res, 'returned').catch(next))
 
+async function managerDepartment(managerId: number) {
+  const [rows] = await pool.query<RowDataPacket[]>('SELECT DISTINCT d.id, d.name FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.manager_user_id = ? AND e.active = TRUE', [managerId])
+  return rows.length === 1 ? rows[0] : null
+}
+
+async function departmentApprovalStatus(managerId: number, period: RowDataPacket) {
+  const department = await managerDepartment(managerId)
+  if (!department) return { department: null, period: period.label, eligible: false, teamTotal: 0, teamApproved: 0, submission: null }
+  const [[team]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total, SUM(t.status = 'approved') AS approvedCount FROM employees e
+    LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ? WHERE e.manager_user_id = ? AND e.active = TRUE`, [period.id, managerId])
+  const [[submission]] = await pool.query<RowDataPacket[]>('SELECT id, status, submitted_by AS submittedBy, submitted_at AS submittedAt, decided_by AS decidedBy, decided_at AS decidedAt, return_reason AS returnReason FROM department_submissions WHERE department_id = ? AND period_label = ? LIMIT 1', [department.id, period.label])
+  const teamTotal = Number(team?.total || 0); const teamApproved = Number(team?.approvedCount || 0)
+  const ready = teamTotal > 0 && teamApproved === teamTotal
+  const eligible = ready && (!submission || submission.status === 'returned')
+  return { department, period: period.label, eligible, teamTotal, teamApproved, submission: submission || null }
+}
+
+app.get('/api/manager/department-submission', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const period = await activeReportingPeriod(); if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
+    return res.json(await departmentApprovalStatus(req.actor!.id, period))
+  } catch (error) { next(error) }
+})
+
+app.post('/api/manager/department-submission', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
+  try {
+    const period = await activeReportingPeriod(); if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
+    const department = await managerDepartment(req.actor!.id)
+    if (!department) return res.status(409).json({ message: 'Your team spans zero or multiple departments. Contact HR to submit department approval.' })
+    await connection.beginTransaction()
+    const [[team]] = await connection.query<RowDataPacket[]>(`SELECT COUNT(*) AS total, SUM(t.status = 'approved') AS approvedCount FROM employees e
+      LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ? WHERE e.manager_user_id = ? AND e.active = TRUE FOR UPDATE`, [period.id, req.actor!.id])
+    if (!Number(team?.total || 0) || Number(team?.approvedCount || 0) !== Number(team?.total || 0)) { await connection.rollback(); return res.status(409).json({ message: 'Every active team member needs a Manager-approved timesheet before the department can be submitted.' }) }
+    const [[existing]] = await connection.query<RowDataPacket[]>('SELECT id, status FROM department_submissions WHERE department_id = ? AND period_label = ? FOR UPDATE', [department.id, period.label])
+    if (existing && existing.status !== 'returned') { await connection.rollback(); return res.status(409).json({ message: 'This department has already been submitted for the current period.' }) }
+    let submissionId = Number(existing?.id || 0)
+    if (existing) await connection.query("UPDATE department_submissions SET status = 'submitted', submitted_by = ?, submitted_at = NOW(), decided_by = NULL, decided_at = NULL, return_reason = NULL WHERE id = ?", [req.actor!.email, existing.id])
+    else { const [created] = await connection.query<ResultSetHeader>("INSERT INTO department_submissions (department_id, period_label, status, submitted_by) VALUES (?, ?, 'submitted', ?)", [department.id, period.label, req.actor!.email]); submissionId = created.insertId }
+    await connection.query("UPDATE billing_cycles SET current_stage = 'director_approval' WHERE period_label = ? AND current_stage IN ('timesheet_entry', 'manager_submission')", [period.label])
+    await writeWorkflowAudit(connection, req.actor!, existing ? 'Department resubmitted for Director approval' : 'Department submitted for Director approval', 'department_submission', submissionId, `${department.name} · ${period.label}`, existing ? { status: existing.status } : null, { status: 'submitted' })
+    await connection.commit()
+    return res.json({ message: 'Department submitted for Director approval.' })
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+})
+
 app.get('/api/employee/dashboard', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
   try {
     const employee = await employeeForActor(req.actor!)
@@ -1547,7 +1602,7 @@ app.post('/api/auth/google', async (req: Request<object, object, AuthRequest>, r
 
     const email = payload.email.toLowerCase()
     const [rows] = await pool.query<UserRecord[]>('SELECT * FROM users WHERE email = ? OR google_sub = ? LIMIT 1', [email, payload.sub])
-    let user = rows[0]
+    const user = rows[0]
     if (!user) return res.status(403).json({ message: 'This Google account has not been approved for this workspace.' })
     if (user.role !== role) return res.status(403).json({ message: `This account is registered as ${user.role}. Choose that role to continue.` })
     if (user.role === 'employee') {
