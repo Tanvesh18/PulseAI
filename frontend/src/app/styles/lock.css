@@ -1,24 +1,3 @@
-.role-card.locked {
-  cursor: not-allowed;
-  opacity: .58;
-  background: #f6f8fa;
-}
-
-.role-card.locked:hover {
-  border-color: #e2e8ee;
-  transform: none;
-}
-
-.role-card.locked .role-icon {
-  color: #7b8996;
-  background: #edf1f4;
-}
-
-.lock-icon {
-  font-size: 10px;
-  margin-left: 3px;
-}
-
 .admin-note {
   color: #718092;
   font-size: 12px;
