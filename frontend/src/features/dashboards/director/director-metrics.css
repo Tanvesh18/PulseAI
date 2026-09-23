@@ -1,1 +1,0 @@
-.metrics-strip{grid-template-columns:repeat(5,minmax(0,1fr))}.metrics-strip>div{padding-inline:12px}@media(max-width:700px){.metrics-strip>div:nth-child(2){border-right:1px solid var(--ops-line)}.metrics-strip>div:nth-child(4){border-right:0}.metrics-strip>div:nth-last-child(-n+2){border-bottom:0}.metrics-strip>div:nth-last-child(3){border-bottom:1px solid var(--ops-line)}}

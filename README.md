@@ -26,11 +26,10 @@ PulseAI/
 │   ├── timesheetRules.ts     Timesheet business rules
 │   └── tests/                Unit and MySQL integration tests
 ├── frontend/                 React, TypeScript, and Vite application
-│   ├── src/App.tsx           Authentication and workspace routing
-│   ├── src/*Dashboard.tsx    Role-specific workspaces
-│   └── vite.config.ts        Development server and API proxy
+│   ├── src/app/App.tsx                    Authentication and workspace routing
+│   ├── src/features/dashboards/<role>/    Role-specific workspaces
+│   └── vite.config.ts                     Development server and API proxy
 ├── docs/                     Retained workflow and product references
-├── PRODUCT.md                Product scope and design principles
 └── .env.example files        Safe configuration templates
 ```
 
@@ -256,8 +255,6 @@ PulseAI is being developed around these principles:
 3. Prefer explainable, auditable workflow states over opaque automation.
 4. Keep operational work dense, calm, and action-oriented.
 5. Build role experiences progressively without breaking shared data integrity.
-
-See [PRODUCT.md](PRODUCT.md) for the fuller product scope, operating context, constraints, and accessibility expectations.
 
 ## Current Scope Notes
 
