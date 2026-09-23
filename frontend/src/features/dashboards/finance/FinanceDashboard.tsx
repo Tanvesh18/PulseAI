@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiUrl } from '../../../api/client'
+import { apiUrl, handleUnauthorized } from '../../../api/client'
 import { Archive, ArrowDownToLine, Bell, BriefcaseBusiness, Check, ChevronLeft, CircleAlert, ClipboardList, FileClock, LayoutDashboard, LogOut, Receipt, Settings2 } from 'lucide-react'
 import './finance.css'
 
@@ -8,6 +8,7 @@ type Tab = 'overview' | 'work' | 'invoices' | 'projects' | 'exceptions' | 'audit
 
 async function api(path: string, token: string, method = 'GET', body?: object) {
   const response = await fetch(apiUrl(`/finance${path}`), { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  if (handleUnauthorized(response.status)) throw new Error('Your session has expired. Please sign in again.')
   const text = await response.text(); let data: any = {}
   try { data = text ? JSON.parse(text) : {} } catch { data = { message: 'The server returned an unreadable response.' } }
   if (!response.ok) throw new Error(data.message || 'Unable to complete Finance action.')
@@ -51,7 +52,7 @@ export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: (
       {data && !selectedInvoice && tab === 'projects' ? <Projects token={token} projects={projects} clients={clients} initialProjectId={requestedProjectId} onExport={() => exportFile('project-summary')} onDone={finishAction} /> : null}
       {data && !selectedInvoice && tab === 'exceptions' ? <Exceptions token={token} onProject={(id: number) => { setRequestedProjectId(id); setTab('projects') }} onInvoice={(id: number) => setSelectedInvoice(id)} /> : null}
       {data && !selectedInvoice && tab === 'audit' ? <Audit token={token} /> : null}
-      {data && !selectedInvoice && tab === 'notifications' ? <Notifications token={token} rows={data.notifications || []} onRefresh={load} onInvoice={(id: number) => setSelectedInvoice(id)} onWork={() => setTab('work')} /> : null}
+      {data && !selectedInvoice && tab === 'notifications' ? <Notifications token={token} rows={data.notifications || []} onRefresh={load} onWork={() => setTab('work')} /> : null}
     </section></main>
 }
 
@@ -155,9 +156,9 @@ function Audit({ token }: { token: string }) {
   return <section className="finance-audit"><div className="finance-section-heading"><div><h2>Financial change history</h2><p>Rate, classification, client, and invoice decisions are recorded with their before and after values.</p></div></div>{error ? <div className="finance-inline-error">{error}</div> : null}{loading ? <p className="finance-inline-note">Loading Finance audit…</p> : rows.length ? rows.map((event) => <article key={event.id}><div><strong>{event.action.replaceAll('_', ' ')}</strong><span>{event.entityType} #{event.entityId}</span></div><p>{event.beforeState ? `${event.beforeState} → ` : ''}{event.afterState || 'Recorded'}</p><small>{event.actorName} · {new Date(event.createdAt).toLocaleString()}</small></article>) : <p className="finance-empty">No Finance changes have been recorded yet.</p>}</section>
 }
 
-function Notifications({ token, rows, onRefresh, onInvoice, onWork }: any) {
+function Notifications({ token, rows, onRefresh, onWork }: any) {
   const markRead = async (id: number) => { await api(`/notifications/${id}/read`, token, 'POST'); onRefresh() }
-  return <section className="finance-notifications">{rows.length ? rows.map((item: any) => <article key={item.id} className={item.readAt ? '' : 'unread'}><div><strong>{item.title}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><div>{item.timesheetId ? <button type="button" className="finance-link" onClick={onWork}>Review approved work <small>(timesheet #{item.timesheetId})</small></button> : null}{!item.readAt ? <button type="button" className="finance-link" onClick={() => markRead(item.id)}>Mark read</button> : null}{item.invoiceId ? <button type="button" className="finance-button quiet" onClick={() => onInvoice(item.invoiceId)}>Open invoice</button> : null}</div></article>) : <p className="finance-empty">Finance notifications appear when Manager-approved work is ready for processing.</p>}</section>
+  return <section className="finance-notifications">{rows.length ? rows.map((item: any) => <article key={item.id} className={item.readAt ? '' : 'unread'}><div><strong>{item.title}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><div>{item.timesheetId ? <button type="button" className="finance-link" onClick={onWork}>Review approved work <small>(timesheet #{item.timesheetId})</small></button> : null}{!item.readAt ? <button type="button" className="finance-link" onClick={() => markRead(item.id)}>Mark read</button> : null}</div></article>) : <p className="finance-empty">Finance notifications appear when Manager-approved work is ready for processing.</p>}</section>
 }
 
 function Table({ headings, rows, empty }: { headings: string[]; rows: any[]; empty: string }) {
