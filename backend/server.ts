@@ -425,8 +425,8 @@ async function seedDirectorAccounts() {
   for (const account of accounts) {
     if (!/^\S+@\S+\.\S+$/.test(account.email) || account.password.length < 8) continue
     const [existing] = await pool.query<(UserRecord & { id: number })[]>('SELECT id, role FROM users WHERE email = ? LIMIT 1', [account.email])
-    if (existing[0] && existing[0].role !== 'finance') {
-      console.warn(`Finance account ${account.email} was not synchronized because that email already belongs to a different role.`)
+    if (existing[0] && existing[0].role !== 'director') {
+      console.warn(`Director account ${account.email} was not synchronized because that email already belongs to a different role.`)
       continue
     }
     const passwordHash = await bcrypt.hash(account.password, 12)
