@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiUrl } from './api'
+import { apiUrl } from '../../../api/client'
 import { Bell, Check, ClipboardCheck, FolderKanban, History, LayoutDashboard, LogOut, Plus, RotateCcw, Users } from 'lucide-react'
-import './employee.css'
-import { transitionWorkspace } from './viewTransition'
+import '../shared/employee.css'
+import { transitionWorkspace } from '../../../utils/viewTransition'
 
 type User = { name: string; email: string; role: 'manager' }
 type Tab = 'overview' | 'queue' | 'team' | 'projects' | 'exceptions' | 'history' | 'notifications'

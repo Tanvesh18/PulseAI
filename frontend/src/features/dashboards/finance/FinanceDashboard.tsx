@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiUrl } from './api'
+import { apiUrl } from '../../../api/client'
 import { Archive, ArrowDownToLine, Bell, BriefcaseBusiness, Check, ChevronLeft, CircleAlert, ClipboardList, FileClock, LayoutDashboard, LogOut, Receipt, Settings2 } from 'lucide-react'
 import './finance.css'
 

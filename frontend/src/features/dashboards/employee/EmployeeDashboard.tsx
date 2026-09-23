@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { apiUrl } from './api'
+import { apiUrl } from '../../../api/client'
 import { Bell, Check, ClipboardList, History, LayoutDashboard, LogOut, Pencil, Plus, Send, Trash2 } from 'lucide-react'
-import './employee.css'
+import '../shared/employee.css'
 
 type User = { name: string; email: string; role: 'employee' }
 type Tab = 'overview' | 'timesheet' | 'history' | 'notifications'

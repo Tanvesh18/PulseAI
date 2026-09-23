@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { apiUrl } from './api'
+import { apiUrl } from '../../../api/client'
 import { CalendarDays, LogOut, Users, UserCog } from 'lucide-react'
-import './employee.css'
+import '../shared/employee.css'
 import './hr.css'
 
 type User = { name: string; email: string; role: 'hr' }
