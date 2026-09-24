@@ -119,6 +119,8 @@ Leave `VITE_API_URL` blank for local development so Vite's `/api` proxy continue
 
 The Google OAuth client must be configured for the local frontend origin. Password sign-in remains available without Google configuration.
 
+For Vercel deployments, `frontend/.env.production` supplies the public Google client ID during the Vite build. If the Vercel project defines `VITE_GOOGLE_CLIENT_ID`, that project value takes precedence; add the deployed site origin (for example `https://pulse-ai-one-eta.vercel.app`) to the OAuth client's authorized JavaScript origins in Google Cloud Console.
+
 ### 4. Configure optional GitHub sign-in
 
 GitHub OAuth is configured on the backend. Set these values in `backend/.env` and register the callback URL in the GitHub OAuth application:
