@@ -671,7 +671,7 @@ function requireRole(role: Role) {
     if (!token) return res.status(401).json({ message: 'Sign in is required.' })
     try {
       const payload = jwt.verify(token, jwtSecret!)
-      if (typeof payload === 'string' || payload.role !== role) return res.status(403).json({ message: `${role[0].toUpperCase()}${role.slice(1)} access is required.` })
+      if (typeof payload === 'string' || payload.role !== role) return res.status(403).json({ message: `${role.charAt(0).toUpperCase()}${role.slice(1)} access is required.` })
       const actorId = Number(payload.sub)
       const actorEmail = String(payload.email || '').toLowerCase()
       if (!Number.isInteger(actorId) || !actorEmail) return res.status(401).json({ message: 'Your session is invalid. Please sign in again.' })
