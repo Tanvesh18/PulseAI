@@ -192,6 +192,8 @@ add('get', '/api/director/approvals/{id}', 'Get department submission', { respon
 add('post', '/api/director/approvals/{id}/approve', 'Approve department submission')
 add('post', '/api/director/approvals/{id}/return', 'Return department submission', { body: { reason: 'string' }, required: ['reason'], description: 'Reason must contain at least three characters.' })
 add('get', '/api/director/audit-events', 'Search organization audit events', { query: { search: 'string', role, entity: 'string', page: 'integer', pageSize: 'integer' }, response: { events: 'array:object', pagination: 'object' }, description: 'Results are paginated. The server bounds pageSize and supports search, role, and entity filters.' })
+add('post', '/api/director/demo-showcase/apply', 'Apply the small demo showcase', { description: 'Available only when SEED_DEMO_DATA=true. Idempotently adds the reversible Finance and HR showcase to this backend database. Director access required.' })
+add('post', '/api/director/demo-showcase/revert', 'Revert the small demo showcase', { description: 'Available only when SEED_DEMO_DATA=true. Removes only the unchanged showcase fixture and restores its three original entries. Director access required.' })
 
 // The CSV endpoint has a non-JSON success response.
 const exportOperation = paths['/api/finance/exports/{kind}']!.get as Record<string, unknown>

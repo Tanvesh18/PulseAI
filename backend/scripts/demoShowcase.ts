@@ -1,5 +1,7 @@
 import 'dotenv/config'
 import mysql, { type PoolConnection, type RowDataPacket } from 'mysql2/promise'
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
 const fixture = {
   key: 'pulseai-showcase-v1',
@@ -38,7 +40,7 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
-async function seed(connection: PoolConnection) {
+export async function seedDemoShowcase(connection: PoolConnection) {
   expect(process.env.SEED_DEMO_DATA === 'true', 'This script runs only when SEED_DEMO_DATA=true.')
   await connection.beginTransaction()
   try {
@@ -139,7 +141,7 @@ async function seed(connection: PoolConnection) {
   }
 }
 
-async function revert(connection: PoolConnection, checkOnly = false) {
+export async function revertDemoShowcase(connection: PoolConnection, checkOnly = false) {
   await connection.beginTransaction()
   try {
     const client = await one(connection, 'SELECT id, name, currency, active, billing_email AS billingEmail FROM clients WHERE code = ? FOR UPDATE', [fixture.clientCode])
@@ -224,6 +226,29 @@ async function revert(connection: PoolConnection, checkOnly = false) {
 async function main() {
   const reverting = process.argv.includes('--revert')
   const applying = process.argv.includes('--apply')
+  if (process.argv.includes('--hosted')) {
+    const origin = process.argv.find((argument) => argument.startsWith('--origin='))?.slice('--origin='.length).replace(/\/+$/, '')
+    expect(origin?.startsWith('https://'), 'Pass the hosted backend URL as --origin=https://your-backend.example.')
+    expect(applying, 'Pass --apply to change the hosted showcase fixture.')
+    const email = process.env.DIRECTOR_1_EMAIL
+    const password = process.env.DIRECTOR_1_PASSWORD
+    expect(email && password, 'DIRECTOR_1_EMAIL and DIRECTOR_1_PASSWORD are required for hosted fixture administration.')
+    const login = await fetch(`${origin}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, role: 'director' }),
+    })
+    expect(login.ok, `Hosted Director sign in failed (HTTP ${login.status}).`)
+    const session = await login.json() as { token?: string }
+    expect(session.token, 'Hosted Director sign in returned no token.')
+    const action = reverting ? 'revert' : 'apply'
+    const response = await fetch(`${origin}/api/director/demo-showcase/${action}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${session.token}` },
+    })
+    const result = await response.json() as { message?: string }
+    expect(response.ok, result.message || `Hosted showcase ${action} failed (HTTP ${response.status}).`)
+    console.log(result.message)
+    return
+  }
   if (!applying && !reverting) {
     console.log('Seed is ready. Run npm run demo:showcase -- --apply to add the small showcase fixture.')
     return
@@ -239,12 +264,14 @@ async function main() {
   })
   try {
     const connection = await pool.getConnection()
-    try { if (reverting) await revert(connection, !applying); else await seed(connection) }
+    try { if (reverting) await revertDemoShowcase(connection, !applying); else await seedDemoShowcase(connection) }
     finally { connection.release() }
   } finally { await pool.end() }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exitCode = 1
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error)
+    process.exitCode = 1
+  })
+}

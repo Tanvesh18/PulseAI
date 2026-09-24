@@ -163,7 +163,7 @@ When `SEED_DEMO_DATA=true`, the backend prepares demonstration departments, empl
 
 For a small, reversible Finance and HR showcase on a database that already has the demo accounts and September 2026 timesheet data, run `npm.cmd run demo:showcase -- --apply` from `backend`. It changes three existing seeded internal entries on Aarav's approved timesheet into billable project work without changing their hours, and adds one client, one project, one rate, one finalized sample invoice, one leave record, and one holiday. The command is idempotent and requires `SEED_DEMO_DATA=true`. It does not create role accounts or run automatically on startup.
 
-If you later want to remove only this showcase fixture, run `npm.cmd run demo:revert -- --apply` from `backend` using the same database configuration. The rollback restores the three original entries and removes the fixture records. It stops if the fixture has been edited or linked to other invoices, so it cannot silently remove later work.
+If you later want to remove only this showcase fixture, run `npm.cmd run demo:revert -- --apply` from `backend` using the same database configuration. For a hosted backend whose database differs from your local `.env`, use `npm.cmd run demo:revert -- --hosted --origin=https://your-backend.example --apply` with the configured Director account. The rollback restores the three original entries and removes the fixture records. It stops if the fixture has been edited or linked to other invoices, so it cannot silently remove later work.
 
 | Role | Demo email |
 | --- | --- |

@@ -10,6 +10,7 @@ import { dirname } from 'node:path'
 import { employeeCanEdit, employeeCanSubmit, managerCanDecide, validReturnReason, versionMatches } from './timesheetRules.js'
 import { registerFinanceRoutes } from './financeRoutes.js'
 import { openApiSpec } from './openapi.js'
+import { seedDemoShowcase, revertDemoShowcase } from './scripts/demoShowcase.js'
 
 type Role = 'employee' | 'manager' | 'hr' | 'director' | 'finance'
 type AuthRequest = { name?: string; email?: string; password?: string; role?: string; credential?: string }
@@ -1750,6 +1751,24 @@ app.get('/api/director/audit-events', requireDirector, async (_req: Authenticate
     const total = Number(totalRow?.total || 0)
     return res.json({ events, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } })
   } catch (error) { next(error) }
+})
+
+app.post('/api/director/demo-showcase/apply', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
+  if (process.env.SEED_DEMO_DATA !== 'true') return res.status(404).json({ message: 'Demo showcase is unavailable.' })
+  const connection = await pool.getConnection()
+  try {
+    await seedDemoShowcase(connection)
+    return res.json({ message: 'Small Finance and HR demo showcase applied.' })
+  } catch (error) { next(error) } finally { connection.release() }
+})
+
+app.post('/api/director/demo-showcase/revert', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
+  if (process.env.SEED_DEMO_DATA !== 'true') return res.status(404).json({ message: 'Demo showcase is unavailable.' })
+  const connection = await pool.getConnection()
+  try {
+    await revertDemoShowcase(connection)
+    return res.json({ message: 'Finance and HR demo showcase reverted.' })
+  } catch (error) { next(error) } finally { connection.release() }
 })
 
 app.post('/api/auth/register', authRateLimit, async (req: Request<object, object, AuthRequest>, res: Response, next: NextFunction) => {
