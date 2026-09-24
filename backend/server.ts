@@ -217,7 +217,7 @@ async function initializeDatabase() {
   await pool.query('ALTER TABLE employees ADD COLUMN user_id BIGINT UNSIGNED NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE employees ADD UNIQUE KEY uq_employee_user (user_id)').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE employees ADD CONSTRAINT fk_employee_user FOREIGN KEY (user_id) REFERENCES users(id)').catch(ignoreKnownMigrationError)
-  await pool.query('UPDATE employees e JOIN users u ON LOWER(u.email) = LOWER(e.email) AND u.role = \'employee\' SET e.user_id = u.id WHERE e.user_id IS NULL').catch(ignoreKnownMigrationError)
+  await pool.query('UPDATE employees e JOIN users u ON CONVERT(LOWER(u.email) USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(LOWER(e.email) USING utf8mb4) COLLATE utf8mb4_unicode_ci AND u.role = \'employee\' SET e.user_id = u.id WHERE e.user_id IS NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheets ADD COLUMN assigned_manager_user_id BIGINT UNSIGNED NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheets ADD KEY idx_timesheet_assigned_manager_status (assigned_manager_user_id, status, reporting_period_id)').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheets ADD CONSTRAINT fk_timesheet_assigned_manager FOREIGN KEY (assigned_manager_user_id) REFERENCES users(id)').catch(ignoreKnownMigrationError)
@@ -464,7 +464,7 @@ async function seedDemoEmployeeAccount() {
   const email = String(process.env.EMPLOYEE_1_EMAIL || '').trim().toLowerCase()
   const password = String(process.env.EMPLOYEE_1_PASSWORD || '')
   if (!name || !email || !password) return
-  const [[employee]] = await pool.query<RowDataPacket[]>('SELECT id FROM employees WHERE LOWER(email) = LOWER(?) AND active = TRUE LIMIT 1', [email])
+  const [[employee]] = await pool.query<RowDataPacket[]>('SELECT id FROM employees WHERE CONVERT(LOWER(email) USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(LOWER(?) USING utf8mb4) COLLATE utf8mb4_unicode_ci AND active = TRUE LIMIT 1', [email])
   if (!employee) { console.warn(`Demo employee account skipped: ${email} is not in the active employee roster.`); return }
   const passwordHash = await bcrypt.hash(password, 10)
   const [[existing]] = await pool.query<RowDataPacket[]>('SELECT id FROM users WHERE email = ? LIMIT 1', [email])
@@ -525,7 +525,7 @@ async function seedEmployeeWorkspaceData() {
 }
 
 async function seedDemoTimesheetDetails() {
-  await pool.query(`UPDATE employees e JOIN users u ON u.role = 'manager' AND u.name = e.manager_name
+  await pool.query(`UPDATE employees e JOIN users u ON u.role = 'manager' AND CONVERT(u.name USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(e.manager_name USING utf8mb4) COLLATE utf8mb4_unicode_ci
     SET e.manager_user_id = u.id WHERE e.email LIKE '%@emerson.demo' AND e.manager_user_id IS NULL`)
   await pool.query(`UPDATE timesheets t JOIN employees e ON e.id = t.employee_id
     SET t.assigned_manager_user_id = e.manager_user_id
