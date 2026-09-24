@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiUrl, handleUnauthorized } from '../../../api/client'
+import { apiUrl, handleUnauthorized, requestJson } from '../../../api/client'
 import { Archive, ArrowDownToLine, Bell, BriefcaseBusiness, Check, ChevronLeft, CircleAlert, ClipboardList, FileClock, LayoutDashboard, LogOut, Receipt, Settings2 } from 'lucide-react'
 import './finance.css'
 import logo from '../../../assets/logo.png'
@@ -8,12 +8,7 @@ type User = { name: string; email: string; role: 'finance' }
 type Tab = 'overview' | 'work' | 'invoices' | 'projects' | 'exceptions' | 'audit' | 'notifications'
 
 async function api(path: string, token: string, method = 'GET', body?: object) {
-  const response = await fetch(apiUrl(`/finance${path}`), { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
-  if (handleUnauthorized(response.status)) throw new Error('Your session has expired. Please sign in again.')
-  const text = await response.text(); let data: any = {}
-  try { data = text ? JSON.parse(text) : {} } catch { data = { message: 'The server returned an unreadable response.' } }
-  if (!response.ok) throw new Error(data.message || 'Unable to complete Finance action.')
-  return data
+  return requestJson(`/finance${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), fallbackMessage: 'Unable to complete the Finance action.' })
 }
 
 function money(value: unknown, currency: string) {
@@ -22,19 +17,29 @@ function money(value: unknown, currency: string) {
 }
 
 async function downloadCsv(path: string, token: string) {
-  const response = await fetch(apiUrl(`/finance${path}`), { headers: { Authorization: `Bearer ${token}` } })
-  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.message || 'Unable to export this report.') }
-  const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1] || 'pulseai-finance.csv'; link.click(); URL.revokeObjectURL(url)
+  const controller = new AbortController(); const timeout = window.setTimeout(() => controller.abort(), 20000)
+  try {
+    const response = await fetch(apiUrl(`/finance${path}`), { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
+    if (handleUnauthorized(response.status)) throw new Error('Your session has expired. Please sign in again.')
+    if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.message || 'Unable to export this report.') }
+    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1] || 'pulseai-finance.csv'; link.click(); URL.revokeObjectURL(url)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('The export timed out. Try again after the API is fully awake.')
+    throw error
+  } finally { window.clearTimeout(timeout) }
 }
 
 export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const token = localStorage.getItem('pulseai_token') || ''
   const [tab, setTab] = useState<Tab>('overview'); const [data, setData] = useState<any>(null); const [projects, setProjects] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [selectedInvoice, setSelectedInvoice] = useState<number | null>(null); const [requestedProjectId, setRequestedProjectId] = useState<number | null>(null); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
   const load = useCallback(async () => {
-    try {
-      const [dashboard, projectData, clientData] = await Promise.all([api('/dashboard', token), api('/projects', token), api('/clients', token)])
-      setData(dashboard); setProjects(projectData.projects); setClients(clientData.clients); setError('')
-    } catch (err) { setError(err instanceof Error ? err.message : 'Finance data could not be loaded.') }
+    const [dashboard, projectData, clientData] = await Promise.allSettled([api('/dashboard', token), api('/projects', token), api('/clients', token)])
+    if (dashboard.status === 'fulfilled') { setData(dashboard.value); setError('') }
+    else setError(dashboard.reason instanceof Error ? dashboard.reason.message : 'Finance overview could not be loaded.')
+    if (projectData.status === 'fulfilled') setProjects(projectData.value.projects)
+    if (clientData.status === 'fulfilled') setClients(clientData.value.clients)
+    const optionFailures = [projectData, clientData].filter((result) => result.status === 'rejected').length
+    if (dashboard.status === 'fulfilled' && optionFailures) setMessage(`${optionFailures} billing option list${optionFailures === 1 ? '' : 's'} could not be refreshed. Overview data remains available.`)
   }, [token])
   useEffect(() => { load() }, [load])
   const finishAction = async (text: string) => { setMessage(text); await load() }
@@ -42,7 +47,7 @@ export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: (
   const unread = data?.notifications?.filter((item: any) => !item.readAt).length || 0
   const nav: Array<[Tab, string, typeof LayoutDashboard]> = [['overview', 'Overview', LayoutDashboard], ['work', 'Approved work', ClipboardList], ['invoices', 'Invoices', Receipt], ['projects', 'Projects & rates', BriefcaseBusiness], ['exceptions', 'Exceptions', CircleAlert], ['audit', 'Finance audit', FileClock], ['notifications', 'Notifications', Bell]]
   const title = selectedInvoice ? 'Invoice detail' : ({ overview: 'Finance overview', work: 'Approved work', invoices: 'Invoices', projects: 'Projects & rates', exceptions: 'Financial exceptions', audit: 'Finance audit', notifications: 'Notifications' }[tab])
-  return <main className="finance-app"><aside className="finance-sidebar"><div className="finance-logo"><img src={logo} alt="" /> pulse<span>AI</span></div><p>FINANCE WORKSPACE</p><nav aria-label="Finance workspace">{nav.map(([id, label, Icon]) => <button key={id} type="button" className={!selectedInvoice && tab === id ? 'active' : ''} onClick={() => { setSelectedInvoice(null); setRequestedProjectId(null); setTab(id) }}><Icon size={17} />{label}{id === 'notifications' && unread > 0 ? <small>{unread}</small> : null}</button>)}</nav><div className="finance-user"><span>{user.name[0]}</span><div><strong>{user.name}</strong><small>Finance</small></div><button type="button" aria-label="Sign out" onClick={onSignOut}><LogOut size={16} /></button></div></aside>
+  return <main className="finance-app"><aside className="finance-sidebar"><div className="finance-logo"><img src={logo} alt="" /> pulse<span>AI</span></div><p>FINANCE WORKSPACE</p><nav aria-label="Finance workspace">{nav.map(([id, label, Icon]) => <button key={id} type="button" aria-current={!selectedInvoice && tab === id ? 'page' : undefined} className={!selectedInvoice && tab === id ? 'active' : ''} onClick={() => { setSelectedInvoice(null); setRequestedProjectId(null); setTab(id) }}><Icon size={17} />{label}{id === 'notifications' && unread > 0 ? <small>{unread}</small> : null}</button>)}</nav><div className="finance-user"><span>{user.name[0]}</span><div><strong>{user.name}</strong><small>Finance</small></div><button type="button" aria-label="Sign out" onClick={onSignOut}><LogOut size={16} /></button></div></aside>
     <section className="finance-content"><header className="finance-header"><div>{selectedInvoice ? <button type="button" className="finance-back" onClick={() => setSelectedInvoice(null)}><ChevronLeft size={16} />Back to invoices</button> : null}<h1>{title}</h1><p>{data?.period ? `${data.period} · Manager-approved work only` : 'Manager-approved work and client billing'}</p></div><div className="finance-header-actions"><button type="button" className="finance-button quiet" disabled={busy} onClick={() => exportFile(tab === 'invoices' || selectedInvoice ? 'invoice-lines' : 'unbilled-work')}><ArrowDownToLine size={15} />Export CSV</button><span className="finance-period">{data?.period || 'No active period'}</span></div></header>
       {error ? <div className="finance-message error" role="alert">{error}<button type="button" onClick={load}>Retry</button></div> : null}{message ? <div className="finance-message" role="status">{message}<button type="button" onClick={() => setMessage('')} aria-label="Dismiss message">×</button></div> : null}
       {!data && !error ? <div className="finance-loading" aria-live="polite"><span /><p>Loading Finance records…</p></div> : null}
@@ -53,7 +58,7 @@ export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: (
       {data && !selectedInvoice && tab === 'projects' ? <Projects token={token} projects={projects} clients={clients} initialProjectId={requestedProjectId} onExport={() => exportFile('project-summary')} onDone={finishAction} /> : null}
       {data && !selectedInvoice && tab === 'exceptions' ? <Exceptions token={token} onProject={(id: number) => { setRequestedProjectId(id); setTab('projects') }} onInvoice={(id: number) => setSelectedInvoice(id)} /> : null}
       {data && !selectedInvoice && tab === 'audit' ? <Audit token={token} /> : null}
-      {data && !selectedInvoice && tab === 'notifications' ? <Notifications token={token} rows={data.notifications || []} onRefresh={load} onWork={() => setTab('work')} /> : null}
+      {data && !selectedInvoice && tab === 'notifications' ? <Notifications token={token} rows={data.notifications || []} onRefresh={load} onWork={() => setTab('work')} onError={setError} /> : null}
     </section></main>
 }
 
@@ -72,11 +77,12 @@ function Overview({ data, onNavigate, onProject, onInvoice }: any) {
 function formatTotals(rows: any[] = []) { return rows.length ? rows.map((row) => money(row.amount, row.currency)).join(' · ') : '—' }
 
 function ApprovedWork({ token, projects, clients, onDone, onInvoice }: any) {
-  const [periods, setPeriods] = useState<any[]>([]); const [employees, setEmployees] = useState<any[]>([]); const [rows, setRows] = useState<any[]>([]); const [selected, setSelected] = useState<number[]>([]); const [filters, setFilters] = useState({ period: '', projectId: '', clientId: '', employeeId: '', billingStatus: 'all', billable: 'all' }); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
+  const [periods, setPeriods] = useState<any[]>([]); const [employees, setEmployees] = useState<any[]>([]); const [rows, setRows] = useState<any[]>([]); const [selected, setSelected] = useState<number[]>([]); const [filters, setFilters] = useState({ period: '', projectId: '', clientId: '', employeeId: '', billingStatus: 'all', billable: 'all' }); const [appliedFilters, setAppliedFilters] = useState(filters); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
   useEffect(() => { Promise.all([api('/periods', token), api('/options', token)]).then(([periodData, options]) => { setPeriods(periodData.periods); setEmployees(options.employees) }).catch((err) => setError(err instanceof Error ? err.message : 'Filter options unavailable.')) }, [token])
-  const search = useCallback(async () => { setLoading(true); setError(''); try { const params = new URLSearchParams(); for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value); const result = await api(`/entries?${params}`, token); setRows(result.entries); setSelected([]) } catch (err) { setError(err instanceof Error ? err.message : 'Approved work could not be loaded.') } finally { setLoading(false) } }, [filters, token])
+  const search = useCallback(async () => { setLoading(true); setError(''); try { const params = new URLSearchParams(); for (const [key, value] of Object.entries(appliedFilters)) if (value) params.set(key, value); const result = await api(`/entries?${params}`, token); setRows(result.entries); setSelected([]) } catch (err) { setError(err instanceof Error ? err.message : 'Approved work could not be loaded.') } finally { setLoading(false) } }, [appliedFilters, token])
   useEffect(() => { search() }, [search])
   const createDraft = async () => { try { const result = await api('/invoices', token, 'POST', { entryIds: selected }); await onDone(result.message); onInvoice(Number(result.invoiceId)) } catch (err) { setError(err instanceof Error ? err.message : 'Invoice draft could not be created.') } }
+  const exportReport = async (kind: string) => { try { await downloadCsv(`/exports/${kind}`, token); setError('') } catch (err) { setError(err instanceof Error ? err.message : 'The export could not be downloaded.') } }
   const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
   return <section className="finance-table-section"><div className="finance-filters">
     <label>Reporting period<select value={filters.period} onChange={(event) => setFilters({ ...filters, period: event.target.value })}><option value="">All periods</option>{periods.map((item: any) => <option key={item.periodLabel} value={item.periodLabel}>{item.periodLabel}</option>)}</select></label>
@@ -85,10 +91,10 @@ function ApprovedWork({ token, projects, clients, onDone, onInvoice }: any) {
     <label>Employee<select value={filters.employeeId} onChange={(event) => setFilters({ ...filters, employeeId: event.target.value })}><option value="">All employees</option>{employees.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     <label>Billing status<select value={filters.billingStatus} onChange={(event) => setFilters({ ...filters, billingStatus: event.target.value })}><option value="all">All</option><option value="unbilled">Unbilled</option><option value="draft">Draft invoice</option><option value="ready">Ready invoice</option><option value="finalized">Finalized</option></select></label>
     <label>Classification<select value={filters.billable} onChange={(event) => setFilters({ ...filters, billable: event.target.value })}><option value="all">All</option><option value="billable">Billable</option><option value="nonbillable">Non-billable</option><option value="unclassified">Unclassified</option></select></label>
-    <button type="button" className="finance-button quiet" onClick={search}>Apply filters</button>
+    <button type="button" className="finance-button quiet" onClick={() => setAppliedFilters({ ...filters })}>Apply filters</button>
   </div>
     {error ? <div className="finance-inline-error" role="alert">{error}</div> : null}
-    <div className="finance-table-tools"><span>{loading ? 'Loading approved entries…' : `${rows.length} approved entr${rows.length === 1 ? 'y' : 'ies'}`}</span><div><button type="button" className="finance-button quiet" onClick={() => downloadCsv('approved-work', token)}>Export approved work</button><button type="button" className="finance-button quiet" onClick={() => downloadCsv('unbilled-work', token)}>Export unbilled only</button><button type="button" className="finance-button primary" disabled={!selected.length || loading} onClick={createDraft}><Receipt size={15} />Create draft from {selected.length} selected</button></div></div>
+    <div className="finance-table-tools"><span>{loading ? 'Loading approved entries…' : `${rows.length} approved entr${rows.length === 1 ? 'y' : 'ies'}`}</span><div><button type="button" className="finance-button quiet" onClick={() => exportReport('approved-work')}>Export approved work</button><button type="button" className="finance-button quiet" onClick={() => exportReport('unbilled-work')}>Export unbilled only</button><button type="button" className="finance-button primary" disabled={!selected.length || loading} onClick={createDraft}><Receipt size={15} />Create draft from {selected.length} selected</button></div></div>
     <Table headings={['', 'Work date', 'Employee', 'Project / activity', 'Client', 'Class', 'Hours', 'Rate', 'Amount', 'Billing status']} rows={rows.map((row) => <tr key={row.entryId}><td><input aria-label={`Select approved entry ${row.entryId}`} type="checkbox" disabled={!row.eligibleForInvoice} checked={selected.includes(Number(row.entryId))} onChange={() => toggle(Number(row.entryId))} /></td><td>{row.entryDate}<small>{row.periodLabel}</small></td><td><strong>{row.employeeName}</strong><small>{row.employeeCode}</small></td><td><strong>{row.projectCode || 'Internal'}</strong><small>{row.activityName}</small></td><td>{row.clientName || '—'}</td><td><span className={`finance-state ${row.financialClass}`}>{row.financialClass}</span></td><td className="finance-number">{Number(row.hours).toFixed(2)}</td><td>{row.rateAmount == null ? '—' : money(row.rateAmount, row.rateCurrency || row.clientCurrency)}</td><td className="finance-number">{row.amount == null ? '—' : money(row.amount, row.clientCurrency)}</td><td><span className={`finance-state ${row.billingStatus}`}>{row.billingStatus}</span>{row.exception ? <small className="finance-row-warning">{row.exception}</small> : null}</td></tr>)} empty={loading ? 'Loading approved work…' : 'No Manager-approved work matches these filters.'} />
   </section>
 }
@@ -97,7 +103,8 @@ function Invoices({ token, clients, onOpen }: any) {
   const [rows, setRows] = useState<any[]>([]); const [status, setStatus] = useState(''); const [period, setPeriod] = useState(''); const [clientId, setClientId] = useState(''); const [error, setError] = useState(''); const [loading, setLoading] = useState(true)
   const load = useCallback(async () => { setLoading(true); try { const params = new URLSearchParams(); if (status) params.set('status', status); if (period) params.set('period', period); if (clientId) params.set('clientId', clientId); const result = await api(`/invoices?${params}`, token); setRows(result.invoices); setError('') } catch (err) { setError(err instanceof Error ? err.message : 'Invoices could not be loaded.') } finally { setLoading(false) } }, [token, status, period, clientId])
   useEffect(() => { load() }, [load])
-  return <section className="finance-table-section"><div className="finance-filters"><label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="draft">Draft</option><option value="ready">Ready</option><option value="finalized">Finalized</option><option value="cancelled">Cancelled</option></select></label><label>Billing period<input value={period} onChange={(event) => setPeriod(event.target.value)} placeholder="e.g. September 2026" /></label><label>Client<select value={clientId} onChange={(event) => setClientId(event.target.value)}><option value="">All clients</option>{clients.map((client: any) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><button type="button" className="finance-button quiet" onClick={() => downloadCsv('invoices', token)}>Export invoice summary</button></div>{error ? <div className="finance-inline-error" role="alert">{error}</div> : null}<Table headings={['Invoice', 'Client', 'Period', 'Projects', 'Lines', 'Amount', 'Status', 'Created', '']} rows={rows.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.invoiceNumber}</strong></td><td>{invoice.clientName}<small>{invoice.clientCode}</small></td><td>{invoice.periodLabel}</td><td>{invoice.projects || '—'}</td><td>{invoice.lineCount}</td><td className="finance-number">{money(invoice.subtotal, invoice.currency)}</td><td><span className={`finance-state ${invoice.status}`}>{invoice.status}</span></td><td>{new Date(invoice.createdAt).toLocaleDateString()}</td><td><button type="button" className="finance-button quiet" onClick={() => onOpen(Number(invoice.id))}>Open</button></td></tr>)} empty={loading ? 'Loading invoices…' : 'No invoices match these filters. Build a draft from eligible approved work.'} /></section>
+  const exportReport = async () => { try { await downloadCsv('/exports/invoices', token); setError('') } catch (err) { setError(err instanceof Error ? err.message : 'The invoice export could not be downloaded.') } }
+  return <section className="finance-table-section"><div className="finance-filters"><label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="draft">Draft</option><option value="ready">Ready</option><option value="finalized">Finalized</option><option value="cancelled">Cancelled</option></select></label><label>Billing period<input value={period} onChange={(event) => setPeriod(event.target.value)} placeholder="e.g. September 2026" /></label><label>Client<select value={clientId} onChange={(event) => setClientId(event.target.value)}><option value="">All clients</option>{clients.map((client: any) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><button type="button" className="finance-button quiet" onClick={exportReport}>Export invoice summary</button></div>{error ? <div className="finance-inline-error" role="alert">{error}</div> : null}<Table headings={['Invoice', 'Client', 'Period', 'Projects', 'Lines', 'Amount', 'Status', 'Created', '']} rows={rows.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.invoiceNumber}</strong></td><td>{invoice.clientName}<small>{invoice.clientCode}</small></td><td>{invoice.periodLabel}</td><td>{invoice.projects || '—'}</td><td>{invoice.lineCount}</td><td className="finance-number">{money(invoice.subtotal, invoice.currency)}</td><td><span className={`finance-state ${invoice.status}`}>{invoice.status}</span></td><td>{new Date(invoice.createdAt).toLocaleDateString()}</td><td><button type="button" className="finance-button quiet" onClick={() => onOpen(Number(invoice.id))}>Open</button></td></tr>)} empty={loading ? 'Loading invoices…' : 'No invoices match these filters. Build a draft from eligible approved work.'} /></section>
 }
 
 function InvoiceDetail({ token, invoiceId, onDone }: any) {
@@ -157,11 +164,13 @@ function Audit({ token }: { token: string }) {
   return <section className="finance-audit"><div className="finance-section-heading"><div><h2>Financial change history</h2><p>Rate, classification, client, and invoice decisions are recorded with their before and after values.</p></div></div>{error ? <div className="finance-inline-error">{error}</div> : null}{loading ? <p className="finance-inline-note">Loading Finance audit…</p> : rows.length ? rows.map((event) => <article key={event.id}><div><strong>{event.action.replaceAll('_', ' ')}</strong><span>{event.entityType} #{event.entityId}</span></div><p>{event.beforeState ? `${event.beforeState} → ` : ''}{event.afterState || 'Recorded'}</p><small>{event.actorName} · {new Date(event.createdAt).toLocaleString()}</small></article>) : <p className="finance-empty">No Finance changes have been recorded yet.</p>}</section>
 }
 
-function Notifications({ token, rows, onRefresh, onWork }: any) {
-  const markRead = async (id: number) => { await api(`/notifications/${id}/read`, token, 'POST'); onRefresh() }
+function Notifications({ token, rows, onRefresh, onWork, onError }: any) {
+  const markRead = async (id: number) => { try { await api(`/notifications/${id}/read`, token, 'POST'); onRefresh() } catch (error) { onError(error instanceof Error ? error.message : 'Unable to mark the notification as read.') } }
   return <section className="finance-notifications">{rows.length ? rows.map((item: any) => <article key={item.id} className={item.readAt ? '' : 'unread'}><div><strong>{item.title}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><div>{item.timesheetId ? <button type="button" className="finance-link" onClick={onWork}>Review approved work <small>(timesheet #{item.timesheetId})</small></button> : null}{!item.readAt ? <button type="button" className="finance-link" onClick={() => markRead(item.id)}>Mark read</button> : null}</div></article>) : <p className="finance-empty">Finance notifications appear when Manager-approved work is ready for processing.</p>}</section>
 }
 
 function Table({ headings, rows, empty }: { headings: string[]; rows: any[]; empty: string }) {
-  return <div className="finance-table-wrap" tabIndex={0} role="region" aria-label={`${headings[0]} table`}><table><thead><tr>{headings.map((heading, index) => <th key={`${heading}-${index}`}>{heading}</th>)}</tr></thead><tbody>{rows.length ? rows : <tr><td className="finance-table-empty" colSpan={headings.length}>{empty}</td></tr>}</tbody></table></div>
+  return <div className="finance-table-wrap" tabIndex={0} role="region" aria-label={`${headings.find(Boolean) || 'Data'} table`}><table><caption className="sr-only">{headings.filter(Boolean).join(', ')}</caption><thead><tr>{headings.map((heading, index) => <th key={`${heading}-${index}`}>{heading}</th>)}</tr></thead><tbody>{rows.length ? rows : <tr><td className="finance-table-empty" colSpan={headings.length}>{empty}</td></tr>}</tbody></table></div>
 }
+
+

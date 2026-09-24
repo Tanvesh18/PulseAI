@@ -86,6 +86,7 @@ DB_PASSWORD=your_mysql_password
 DB_NAME=pulseai
 JWT_SECRET=replace_with_a_long_random_secret
 SEED_DEMO_DATA=true
+DEMO_USER_PASSWORD=replace_with_one_shared_demo_password
 ```
 
 The approved account blocks in the template configure sign-in for each role. Add at least one account for the workspace you want to exercise. For example:
@@ -154,9 +155,19 @@ Open `http://localhost:5173` in a browser. Vite proxies `/api` requests to the b
 
 ## Demo Data
 
-When `SEED_DEMO_DATA=true`, the backend prepares demonstration departments, employees, reporting periods, timesheets, approvals, validation findings, finance records, and optional employee account data during startup.
+When `SEED_DEMO_DATA=true`, the backend prepares demonstration departments, employees, reporting periods, timesheets, approvals, validation findings, and finance records during startup. Set `DEMO_USER_PASSWORD` to at least eight characters to create a complete set of role logins with that shared password:
 
-Use demo seeding for local development only. Set it to `false` when connecting to a database that should not receive sample records.
+| Role | Demo email |
+| --- | --- |
+| Employee | `aarav@emerson.demo` |
+| Manager | `meera@emerson.demo` |
+| HR | `hr@emerson.demo` |
+| Finance | `finance@emerson.demo` |
+| Director | `director@emerson.demo` |
+
+Additional Manager accounts are created for `dev@emerson.demo`, `ritu@emerson.demo`, and `nikhil@emerson.demo`. Seeding is idempotent, so restarting the backend fills missing demo records without duplicating them. Existing timesheets that already have workflow audit history are preserved.
+
+Use demo seeding only in local, preview, or dedicated demonstration environments. Set it to `false` before connecting the service to a production database that should contain real workforce records.
 
 The backend also creates configured Director, Manager, Finance, and HR accounts from the corresponding environment-variable blocks. Employee account creation is enabled when `EMPLOYEE_1_NAME`, `EMPLOYEE_1_EMAIL`, and `EMPLOYEE_1_PASSWORD` are configured and the email matches an active employee roster record.
 
@@ -226,11 +237,16 @@ Important backend variables include:
 | `DB_HOST` | MySQL host | `localhost` |
 | `DB_PORT` | MySQL port | `3306` |
 | `DB_NAME` | Application database name | `pulseai` |
+| `DB_SSL` | Enable TLS for hosted MySQL providers such as Aiven | `false` |
+| `DB_CA` | Optional PEM CA certificate with literal `\n` line breaks | Blank |
+| `DB_SSL_REJECT_UNAUTHORIZED` | Require certificate verification without a custom CA | `false` |
 | `MYSQLHOST` / `MYSQLPORT` | Railway MySQL fallback host and port | Blank / `3306` |
 | `MYSQLUSER` / `MYSQLPASSWORD` | Railway MySQL fallback credentials | Blank |
 | `MYSQLDATABASE` | Railway MySQL fallback database name | Blank |
 | `JWT_SECRET` | JWT signing secret | Required |
 | `SEED_DEMO_DATA` | Enable local demonstration records | Disabled unless `true` |
+| `DEMO_USER_PASSWORD` | Shared password used to create all demo role accounts | Blank |
+| `BUSINESS_TIME_ZONE` | Time zone used for deadlines and active periods | `Asia/Kolkata` |
 | `MANAGER_DAILY_HOURS_WARNING_THRESHOLD` | Optional manager warning threshold | Blank |
 
 `DB_*` variables take precedence when explicitly configured. On Railway, the `MYSQL*` variables can be supplied directly by the MySQL service. The backend skips `CREATE DATABASE` when Railway database variables are present, then initializes the application tables and compatibility columns at startup. Review the startup initialization carefully before applying schema changes to an existing production database.
