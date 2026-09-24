@@ -5,8 +5,11 @@ import mysql, { type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { employeeCanEdit, employeeCanSubmit, managerCanDecide, validReturnReason, versionMatches } from './timesheetRules.js'
 import { registerFinanceRoutes } from './financeRoutes.js'
+import { openApiSpec } from './openapi.js'
 
 type Role = 'employee' | 'manager' | 'hr' | 'director' | 'finance'
 type AuthRequest = { name?: string; email?: string; password?: string; role?: string; credential?: string }
@@ -43,6 +46,38 @@ if (!jwtSecret) throw new Error('JWT_SECRET is required. Copy backend/.env.examp
 
 app.use(cors({ origin: clientOrigin }))
 app.use(express.json())
+
+const require = createRequire(import.meta.url)
+const swaggerUiAssets = dirname(require.resolve('swagger-ui-dist/package.json'))
+app.use('/api/docs/assets', express.static(swaggerUiAssets))
+app.get('/api/openapi.json', (_req, res) => res.json(openApiSpec))
+app.get(['/api/docs', '/api/docs/'], (_req, res) => {
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseAI API documentation</title>
+  <link rel="stylesheet" href="/api/docs/assets/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="/api/docs/assets/swagger-ui-bundle.js"></script>
+  <script src="/api/docs/assets/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = () => SwaggerUIBundle({
+      url: '/api/openapi.json',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+      layout: 'StandaloneLayout',
+      filter: true,
+      displayRequestDuration: true
+    })
+  </script>
+</body>
+</html>`)
+})
 
 let pool: mysql.Pool
 let googleClient: OAuth2Client | undefined
@@ -491,7 +526,6 @@ async function seedDemoApprovals() {
   const submissions: Array<[string, 'submitted' | 'approved' | 'returned', string, string | null]> = [
     ['ENG', 'submitted', 'meera@emerson.demo', null],
   ]
-  await pool.query("DELETE FROM department_submissions WHERE period_label = 'September 2026' AND submitted_by IN ('Meera Iyer','Dev Malhotra','Nikhil Roy','Ritu Shah')")
   for (const [code, status, submittedBy, returnReason] of submissions) {
     const departmentId = departmentIds.get(code)
     if (!departmentId) continue

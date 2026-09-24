@@ -9,7 +9,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:integration": "tsx --test tests/*.integration.test.ts"
+    "test:integration": "tsx --test tests/*.integration.test.ts",
+    "demo:showcase": "tsx scripts/demoShowcase.ts",
+    "demo:revert": "tsx scripts/demoShowcase.ts --revert"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +24,8 @@
     "express": "^5.2.1",
     "google-auth-library": "^11.1.0",
     "jsonwebtoken": "^9.0.3",
-    "mysql2": "^3.24.4"
+    "mysql2": "^3.24.4",
+    "swagger-ui-dist": "^5.32.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
