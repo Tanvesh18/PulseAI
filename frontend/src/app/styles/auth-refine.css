@@ -6,3 +6,25 @@
 .auth-page .role-card > span:last-child { min-width: 0; overflow: hidden; }
 .auth-page .role-card strong,
 .auth-page .role-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Auth form layout and validation */
+.auth-page .form-panel{padding:clamp(24px,4vw,60px);background:var(--pulse-canvas)}
+.auth-page .form-shell{width:min(100%,480px);padding:clamp(24px,3vw,38px);border-radius:16px;background:var(--pulse-surface);box-shadow:0 18px 48px rgba(12,34,54,.10)}
+.auth-page .form-shell header{margin-bottom:22px}
+.auth-page .form-shell form{gap:17px}
+.auth-page .auth-field{display:grid;gap:7px;min-width:0}
+.auth-page .auth-field label{color:var(--pulse-ink);font-size:13px;font-weight:700}
+.auth-page .field-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.auth-page .password-field{display:block;position:relative}
+.auth-page .password-field input{padding-right:48px}
+.auth-page .show-password{position:absolute;top:50%;transform:translateY(-50%);right:8px;width:36px;height:36px;border:0;border-radius:6px;background:transparent;cursor:pointer}
+.auth-page .show-password:hover{background:#edf5f3}
+.auth-page .auth-field input[aria-invalid="true"]{border-color:var(--pulse-red)}
+.auth-page .field-error{margin:0;color:var(--pulse-red);font-size:12px;line-height:1.4}
+.auth-page .recovery-note{margin:3px 0 0;padding:10px 12px;border-radius:8px;background:#edf5f3;color:var(--pulse-ink);font-size:12px;line-height:1.5}
+.auth-page .text-button{font-size:12px;text-decoration:underline;text-underline-offset:3px}
+.auth-page .primary-button{width:100%;min-height:48px;margin-top:5px}
+.auth-page .switch-mode{margin:19px 0 0;font-size:13px}
+.auth-page .switch-mode button{text-decoration:underline;text-underline-offset:3px}
+@media(max-width:780px){.auth-page .form-panel{padding:24px 16px 36px}.auth-page .form-shell{padding:24px}}
+@media(max-width:480px){.auth-page .form-shell{padding:22px 18px}.auth-page .role-grid{gap:8px}.auth-page .role-card{padding:9px}}

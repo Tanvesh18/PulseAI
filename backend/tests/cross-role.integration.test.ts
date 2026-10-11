@@ -6,6 +6,7 @@ import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
+import { createTestPeriod } from './testPeriod.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
@@ -13,6 +14,7 @@ const backendDir = resolve(import.meta.dirname, '..')
 test('HR, Manager, Employee, Finance, and Director share one authorized workflow', { skip: !enabled }, async () => {
   const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Set ${key} in backend/.env to run cross-role integration tests.`); return value }
   const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
+  let testPeriodId = 0
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`; const password = `CrossRole-${suffix}-Pass!`
   const emails = { hr: `hr-${suffix}@pulseai.integration`, manager: `manager-${suffix}@pulseai.integration`, newManager: `new-manager-${suffix}@pulseai.integration`, employee: `employee-${suffix}@pulseai.integration`, finance: `finance-${suffix}@pulseai.integration`, director: `director-${suffix}@pulseai.integration` }
   let server: ChildProcess | undefined; let port = 0; let departmentId = 0; let hrId = 0; let managerId = 0; let newManagerId = 0; let financeId = 0; let directorId = 0; let employeeId = 0; let employeeUserId = 0; let projectId = 0; let activityId = 0; let clientId = 0; let timesheetId = 0; let entryId = 0; let leaveId = 0; let holidayId = 0; let invoiceId = 0; let departmentSubmissionId = 0; let serverOutput = ''
@@ -23,8 +25,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
   const login = async (email: string, role: string) => { const response = await fetch(`http://127.0.0.1:${port}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, role }) }); const data = await response.json() as any; assert.equal(response.status, 200, JSON.stringify(data)); return data.token as string }
   const workdays = (start: string, count: number) => { const days: string[] = []; const date = new Date(`${start}T00:00:00Z`); while (days.length < count) { if (date.getUTCDay() !== 0 && date.getUTCDay() !== 6) days.push(date.toISOString().slice(0, 10)); date.setUTCDate(date.getUTCDate() + 1) }; return days }
   try {
-    const [[period]] = await db.query<any[]>("SELECT id,label,DATE_FORMAT(starts_on,'%Y-%m-%d') AS startsOn FROM reporting_periods WHERE active=TRUE ORDER BY starts_on DESC LIMIT 1")
-    assert.ok(period, 'An active reporting period is required.')
+    const period = await createTestPeriod(db, suffix); testPeriodId = period.id
     const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1'); assert.ok(department); departmentId = Number(department.id)
     const [listener] = await new Promise<[ReturnType<typeof createServer>, number]>((resolvePort, reject) => { const server = createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => resolvePort([server, (server.address() as any).port])) })
     port = (listener.address() as any).port; await new Promise<void>(resolveClose => listener.close(() => resolveClose()))
@@ -36,6 +37,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
 
     const hr = await login(emails.hr,'hr'); const manager = await login(emails.manager,'manager'); const newManager = await login(emails.newManager,'manager'); const finance = await login(emails.finance,'finance'); const director = await login(emails.director,'director')
     const added = await request('/hr/employees', hr, 'POST', { employeeCode:`XR-${suffix}`, name:'Cross-role employee', email:emails.employee, departmentId, managerUserId:managerId }); assert.equal(added.status,201,JSON.stringify(added.data)); employeeId = Number(added.data.employeeId)
+    await db.query('UPDATE employees SET region = ? WHERE id = ?', [`test-${suffix}`, employeeId])
     assert.equal((await request('/hr/overview', manager)).status,403,'Manager cannot access HR API.')
     const registration = await fetch(`http://127.0.0.1:${port}/api/auth/register`, { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Cross-role employee',email:emails.employee,password,role:'employee'}) }); const employeeAccount = await registration.json() as any; assert.equal(registration.status,201,JSON.stringify(employeeAccount)); employeeUserId=Number(employeeAccount.user.id); const employee=employeeAccount.token as string
     const managerTeam = await request('/manager/team',manager); assert.ok(managerTeam.data.team.some((row:any)=>Number(row.id)===employeeId))
@@ -67,7 +69,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     const resubmission = await request('/employee/timesheet/submit-daily',employee,'POST'); assert.equal(resubmission.status,200)
     assert.equal((await request(`/manager/timesheets/${timesheetId}`,manager)).status,404,'Resubmission remains with the explicitly assigned reviewer.')
     const secondReview = await request(`/manager/timesheets/${timesheetId}`,newManager); assert.equal(secondReview.data.timesheet.status,'resubmitted')
-    assert.equal((await request(`/manager/timesheets/${timesheetId}/approve`,newManager,'POST',{version:secondReview.data.timesheet.version})).status,200)
+    const approval = await request(`/manager/timesheets/${timesheetId}/approve`,newManager,'POST',{version:secondReview.data.timesheet.version}); assert.equal(approval.status,200,JSON.stringify({ response:approval.data, review:secondReview.data }))
     assert.equal((await request(`/employee/timesheet/entries/${entryId}`,employee,'PUT',{entryDate,projectId,activityId,hours:2,workDescription:'Approved entry is read-only'})).status,409)
     assert.equal((await request('/finance/entries',director)).status,403)
     const client = await request('/finance/clients',finance,'POST',{code:`XC-${suffix}`,name:'Cross-role billing client',currency:'USD'}); assert.equal(client.status,201,JSON.stringify(client.data)); clientId=Number(client.data.clientId)
@@ -104,6 +106,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     if (userIds.length) await db.query(`DELETE FROM notifications WHERE recipient_email IN (${userIds.map(()=>'?').join(',')})`,userIds.map(id=>emails[Object.entries({hr:hrId,manager:managerId,newManager:newManagerId,employee:employeeUserId,finance:financeId,director:directorId}).find(([,value])=>value===id)?.[0] as keyof typeof emails] || '')).catch(()=>undefined)
     if (employeeId) await db.query('DELETE FROM employee_project_assignments WHERE employee_id=?',[employeeId]).catch(()=>undefined)
     if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (${userIds.map(()=>'?').join(',')})`,userIds).catch(()=>undefined)
+    if (testPeriodId) await db.query('DELETE FROM reporting_periods WHERE id=?', [testPeriodId])
     await db.end()
   }
 })

@@ -6,6 +6,7 @@ import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
+import { createTestPeriod } from './testPeriod.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
@@ -14,11 +15,13 @@ test('Finance processes approved work once and preserves finalized rate snapshot
   const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Set ${key} in backend/.env to run Finance integration tests.`); return value }
   const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`; const password = `Finance-${suffix}-Pass!`; const financeEmail = `finance-${suffix}@pulseai.integration`; const otherEmail = `director-${suffix}@pulseai.integration`
+  const testPeriodIds: number[] = []
   let server: ChildProcess | undefined; let port = 0; let financeId = 0; let otherId = 0; let projectId = 0; let noRateProjectId = 0; let activityId = 0; let internalActivityId = 0; let clientId = 0; let employeeId = 0; let timesheetId = 0; let entryId = 0; let reusableEntryId = 0; let unapprovedEntryId = 0; let noRateEntryId = 0; let invoiceId = 0; const cancelledInvoiceIds: number[] = []; let serverOutput = ''
   const request = async (path: string, authToken: string, method = 'GET', body?: object) => { const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }); const text = await response.text(); let data: any = {}; try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }; return { status: response.status, data } }
   const login = async (email: string, role: string) => { const response = await fetch(`http://127.0.0.1:${port}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, role }) }); const data = await response.json() as any; assert.equal(response.status, 200, JSON.stringify(data)); return data.token as string }
   try {
-    const [[period]] = await db.query<any[]>('SELECT id, label, DATE_FORMAT(starts_on, \'%Y-%m-%d\') AS startsOn FROM reporting_periods WHERE active = TRUE ORDER BY starts_on DESC LIMIT 1'); assert.ok(period, 'An active reporting period is required.')
+    const period = await createTestPeriod(db, suffix); testPeriodIds.push(period.id)
+    const unapprovedPeriod = await createTestPeriod(db, suffix, 30); testPeriodIds.push(unapprovedPeriod.id)
     const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1'); assert.ok(department, 'At least one department is required.')
     const listener = createServer(); await new Promise<void>((resolvePort, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolvePort) }); port = (listener.address() as any).port; await new Promise<void>(resolveClose => listener.close(() => resolveClose()))
     server = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { cwd: backendDir, env: { ...process.env, PORT: String(port), SEED_DEMO_DATA: 'false' }, stdio: ['ignore', 'pipe', 'pipe'] }); server.stdout?.on('data', chunk => { serverOutput += chunk.toString() }); server.stderr?.on('data', chunk => { serverOutput += chunk.toString() })
@@ -37,7 +40,7 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     const [sheetResult] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, period.id, period.label, 4, 'approved']); timesheetId = sheetResult.insertId
     const [entryResult] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [timesheetId, period.startsOn, projectId, activityId, 4, 'Finance integration source']); entryId = entryResult.insertId
     const [reusableEntry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [timesheetId, period.startsOn, projectId, activityId, 1, 'Draft cancellation source']); reusableEntryId = reusableEntry.insertId
-    const [unapprovedSheet] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, period.id, period.label, 2, 'submitted'])
+    const [unapprovedSheet] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, unapprovedPeriod.id, unapprovedPeriod.label, 2, 'submitted'])
     const [unapprovedEntry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [unapprovedSheet.insertId, period.startsOn, projectId, activityId, 2, 'Not approved']); unapprovedEntryId = unapprovedEntry.insertId
     const [missingRateEntry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [timesheetId, period.startsOn, noRateProjectId, activityId, 1, 'No effective billing rate']); noRateEntryId = missingRateEntry.insertId
     const financeToken = await login(financeEmail, 'finance'); const directorToken = await login(otherEmail, 'director')
@@ -84,6 +87,7 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     if (financeId) await db.query('DELETE FROM finance_audit_events WHERE actor_user_id = ?', [financeId]).catch(() => undefined)
     if (financeId) await db.query('DELETE FROM users WHERE id = ?', [financeId]).catch(() => undefined)
     if (otherId) await db.query('DELETE FROM users WHERE id = ?', [otherId]).catch(() => undefined)
+    for (const id of testPeriodIds.reverse()) await db.query('DELETE FROM reporting_periods WHERE id = ?', [id])
     await db.end()
   }
 })

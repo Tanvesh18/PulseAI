@@ -9,7 +9,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:integration": "tsx --test tests/*.integration.test.ts",
+    "test:integration": "tsx --test --test-concurrency=1 tests/*.integration.test.ts",
     "demo:showcase": "tsx scripts/demoShowcase.ts",
     "demo:revert": "tsx scripts/demoShowcase.ts --revert"
   },

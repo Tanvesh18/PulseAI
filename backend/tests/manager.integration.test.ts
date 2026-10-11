@@ -6,6 +6,7 @@ import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
+import { createTestPeriod } from './testPeriod.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
@@ -19,13 +20,15 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
   const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
   let server: ChildProcess | undefined; let port = 0; let managerId = 0; let outsiderManagerId = 0; let employeeId = 0; let outsiderEmployeeId = 0; let managerEmail = ''; let outsiderManagerEmail = ''; let employeeEmail = ''; let outsiderEmail = ''; let projectId = 0; let outsiderProjectId = 0; let activityId = 0; let sheetId = 0; let concurrentSheetId = 0; let draftSheetId = 0; let outsiderSheetId = 0; let entryId = 0; let employeeUserId = 0; let outsiderEmployeeUserId = 0; let periodId = 0; let periodLabel = ''; let departmentId = 0; let serverOutput = ''
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`
+  const testPeriodIds: number[] = []
   const password = `Integration-${suffix}-Pass!`
   const token = async (email: string, role: string) => { const response = await fetch(`http://127.0.0.1:${port}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, role }) }); const data = await response.json() as any; assert.equal(response.status, 200, `${email}: ${JSON.stringify(data)}`); return data.token as string }
   const request = async (path: string, authToken: string, method = 'GET', body?: object) => { const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }); const raw = await response.text(); let data: any = {}; try { data = raw ? JSON.parse(raw) : {} } catch { data = { raw } }; return { status: response.status, data } }
   const workday = (dateText: string) => { const date = new Date(`${dateText}T00:00:00Z`); while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date.setUTCDate(date.getUTCDate() + 1); return date.toISOString().slice(0, 10) }
   try {
-    const [[period]] = await db.query<any[]>('SELECT id, label, DATE_FORMAT(starts_on, \'%Y-%m-%d\') AS startsOn FROM reporting_periods WHERE active = TRUE ORDER BY starts_on DESC LIMIT 1')
-    assert.ok(period, 'An active reporting period is required for integration tests; start the backend once with demo seed data enabled.')
+    const period = await createTestPeriod(db, suffix); testPeriodIds.push(period.id)
+    const concurrentPeriod = await createTestPeriod(db, suffix, 30); testPeriodIds.push(concurrentPeriod.id)
+    const draftPeriod = await createTestPeriod(db, suffix, 60); testPeriodIds.push(draftPeriod.id)
     periodId = Number(period.id); periodLabel = period.label
     const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1')
     assert.ok(department, 'At least one department must exist in the MySQL database.')
@@ -49,15 +52,15 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     await db.query('INSERT INTO employee_project_assignments (employee_id,project_id,active,starts_on) VALUES (?,?,TRUE,?)', [outsiderEmployeeId, outsiderProjectId, period.startsOn])
     await db.query('INSERT INTO project_activity_assignments (project_id,activity_id,active,created_by_user_id) VALUES (?,?,TRUE,?)', [outsiderProjectId, activityId, outsiderManagerId])
     const entryDate = workday(period.startsOn)
-    const makeTimesheet = async (status: string, hours: number) => {
-      const [result] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status,submitted_at) VALUES (?,?,?,?,?,NOW())', [employeeId, periodId, periodLabel, hours, status])
+    const makeTimesheet = async (status: string, hours: number, fixturePeriod = period) => {
+      const [result] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status,submitted_at) VALUES (?,?,?,?,?,NOW())', [employeeId, fixturePeriod.id, fixturePeriod.label, hours, status])
       const [entry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [result.insertId, entryDate, projectId, activityId, hours, 'Integration test work'])
       return { timesheetId: result.insertId, entryId: entry.insertId }
     }
     const first = await makeTimesheet('submitted', 8.5); sheetId = first.timesheetId; entryId = first.entryId
-    const concurrent = await makeTimesheet('submitted', 7); concurrentSheetId = concurrent.timesheetId
+    const concurrent = await makeTimesheet('submitted', 7, concurrentPeriod); concurrentSheetId = concurrent.timesheetId
     const [outsiderSheetInsert] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [outsiderEmployeeId, periodId, periodLabel, 0, 'draft']); outsiderSheetId = outsiderSheetInsert.insertId
-    const [draftInsert] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, periodId, periodLabel, 0, 'draft']); draftSheetId = draftInsert.insertId
+    const [draftInsert] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, draftPeriod.id, draftPeriod.label, 0, 'draft']); draftSheetId = draftInsert.insertId
 
     // Keep this isolated from application/demo seeding: in particular the demo
     // seed assigns every employee to every project, which would mutate unrelated rows.
@@ -93,7 +96,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     const edit = await request(`/employee/timesheet/entries/${entryId}`, employeeToken, 'PUT', { entryDate, projectId, activityId, hours: 7.5, workDescription: 'Corrected integration test work' }); assert.equal(edit.status, 200)
     const resubmitted = await request('/employee/timesheet/submit-daily', employeeToken, 'POST'); assert.equal(resubmitted.status, 200)
     const reviewAgain = await request(`/manager/timesheets/${sheetId}`, managerToken); assert.equal(reviewAgain.data.timesheet.status, 'resubmitted')
-    const approved = await request(`/manager/timesheets/${sheetId}/approve`, managerToken, 'POST', { version: Number(reviewAgain.data.timesheet.version) }); assert.equal(approved.status, 200)
+    const approved = await request(`/manager/timesheets/${sheetId}/approve`, managerToken, 'POST', { version: Number(reviewAgain.data.timesheet.version) }); assert.equal(approved.status, 200, JSON.stringify({ response: approved.data, review: reviewAgain.data }))
     const lockedEdit = await request(`/employee/timesheet/entries/${entryId}`, employeeToken, 'PUT', { entryDate, projectId, activityId, hours: 6, workDescription: 'Should stay locked' }); assert.equal(lockedEdit.status, 409)
     const [approvedRows] = await db.query<any[]>('SELECT status, reviewer_user_id, approved_at FROM timesheets WHERE id = ?', [sheetId]); assert.equal(approvedRows[0].status, 'approved'); assert.equal(Number(approvedRows[0].reviewer_user_id), managerId); assert.ok(approvedRows[0].approved_at)
     const [auditRows] = await db.query<any[]>('SELECT event_type, detail FROM timesheet_audit_events WHERE timesheet_id = ? ORDER BY id', [sheetId]); assert.deepEqual(auditRows.map(row => row.event_type), ['returned', 'entry_updated', 'resubmitted', 'approved']); assert.match(auditRows[0].detail, /Confirm the selected client project/)
@@ -120,6 +123,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
       if (employeeIds.length) { const marks = employeeIds.map(() => '?').join(','); await db.query(`DELETE FROM employees WHERE id IN (${marks})`, employeeIds) }
       if (userIds.length) { const marks = userIds.map(() => '?').join(','); await db.query(`DELETE FROM users WHERE id IN (${marks})`, userIds) }
     }
+    for (const id of testPeriodIds.reverse()) await db.query('DELETE FROM reporting_periods WHERE id = ?', [id])
     await db.end()
   }
 })
