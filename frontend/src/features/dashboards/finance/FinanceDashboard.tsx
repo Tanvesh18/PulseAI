@@ -31,10 +31,11 @@ async function downloadCsv(path: string, token: string) {
 
 export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const token = localStorage.getItem('pulseai_token') || ''
-  const [tab, setTab] = useState<Tab>('overview'); const [data, setData] = useState<any>(null); const [projects, setProjects] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [selectedInvoice, setSelectedInvoice] = useState<number | null>(null); const [requestedProjectId, setRequestedProjectId] = useState<number | null>(null); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
+  const [tab, setTab] = useState<Tab>('overview'); const [noActivePeriod, setNoActivePeriod] = useState(false); const [data, setData] = useState<any>(null); const [projects, setProjects] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [selectedInvoice, setSelectedInvoice] = useState<number | null>(null); const [requestedProjectId, setRequestedProjectId] = useState<number | null>(null); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
   const load = useCallback(async () => {
     const [dashboard, projectData, clientData] = await Promise.allSettled([api('/dashboard', token), api('/projects', token), api('/clients', token)])
-    if (dashboard.status === 'fulfilled') { setData(dashboard.value); setError('') }
+    if (dashboard.status === 'fulfilled') { setData(dashboard.value); setNoActivePeriod(false); setError('') }
+    else if (dashboard.reason instanceof Error && dashboard.reason.message === 'No active reporting period found.') { setData({ period: null, metrics: {}, exceptions: [], notifications: [] }); setNoActivePeriod(true); setError('') }
     else setError(dashboard.reason instanceof Error ? dashboard.reason.message : 'Finance overview could not be loaded.')
     if (projectData.status === 'fulfilled') setProjects(projectData.value.projects)
     if (clientData.status === 'fulfilled') setClients(clientData.value.clients)
@@ -51,7 +52,8 @@ export function FinanceDashboard({ user, onSignOut }: { user: User; onSignOut: (
     <section className="finance-content"><header className="finance-header"><div>{selectedInvoice ? <button type="button" className="finance-back" onClick={() => setSelectedInvoice(null)}><ChevronLeft size={16} />Back to invoices</button> : null}<h1>{title}</h1><p>{data?.period ? `${data.period} · Manager-approved work only` : 'Manager-approved work and client billing'}</p></div><div className="finance-header-actions"><button type="button" className="finance-button quiet" disabled={busy} onClick={() => exportFile(tab === 'invoices' || selectedInvoice ? 'invoice-lines' : 'unbilled-work')}><ArrowDownToLine size={15} />Export CSV</button><span className="finance-period">{data?.period || 'No active period'}</span></div></header>
       {error ? <div className="finance-message error" role="alert">{error}<button type="button" onClick={load}>Retry</button></div> : null}{message ? <div className="finance-message" role="status">{message}<button type="button" onClick={() => setMessage('')} aria-label="Dismiss message">×</button></div> : null}
       {!data && !error ? <div className="finance-loading" aria-live="polite"><span /><p>Loading Finance records…</p></div> : null}
-      {data && !selectedInvoice && tab === 'overview' ? <Overview data={data} onNavigate={setTab} onProject={(id: number) => { setRequestedProjectId(id); setTab('projects') }} onInvoice={(id: number) => setSelectedInvoice(id)} /> : null}
+      {data && !selectedInvoice && tab === 'overview' && noActivePeriod ? <div className="finance-section" role="status"><h2>No active reporting period</h2><p>Ask HR to open a reporting period covering today. Historical approved work and invoices remain available in the other tabs.</p></div> : null}
+       {data && !selectedInvoice && tab === 'overview' && !noActivePeriod ? <Overview data={data} onNavigate={setTab} onProject={(id: number) => { setRequestedProjectId(id); setTab('projects') }} onInvoice={(id: number) => setSelectedInvoice(id)} /> : null}
       {data && !selectedInvoice && tab === 'work' ? <ApprovedWork token={token} projects={projects} clients={clients} onDone={finishAction} onInvoice={(id: number) => { setSelectedInvoice(id); setTab('invoices') }} /> : null}
       {data && !selectedInvoice && tab === 'invoices' ? <Invoices token={token} clients={clients} onOpen={(id: number) => setSelectedInvoice(id)} /> : null}
       {data && selectedInvoice ? <InvoiceDetail token={token} invoiceId={selectedInvoice} onDone={finishAction} /> : null}

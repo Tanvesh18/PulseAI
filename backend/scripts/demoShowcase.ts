@@ -40,7 +40,16 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
-export async function seedDemoShowcase(connection: PoolConnection) {
+type ShowcaseActor = { id: number; email: string }
+
+async function writeShowcaseAudit(connection: PoolConnection, actor: ShowcaseActor | undefined, action: string, projectId: number, affected: Record<string, unknown>) {
+  if (!actor) return
+  await connection.query(`INSERT INTO audit_events (actor_name, actor_user_id, actor_role, action, target, entity_type, entity_id, after_state)
+    VALUES (?, ?, 'director', ?, ?, 'demo_showcase', ?, CAST(? AS JSON))`,
+  [actor.email, actor.id, action, `Demo showcase · ${fixture.period}`, projectId, JSON.stringify(affected)])
+}
+
+export async function seedDemoShowcase(connection: PoolConnection, actor?: ShowcaseActor) {
   expect(process.env.SEED_DEMO_DATA === 'true', 'This script runs only when SEED_DEMO_DATA=true.')
   await connection.beginTransaction()
   try {
@@ -133,6 +142,14 @@ export async function seedDemoShowcase(connection: PoolConnection) {
     const holiday = await one(connection, 'SELECT id, name FROM public_holidays WHERE holiday_date = ? AND region = ? LIMIT 1', [fixture.holidayDate, 'default'])
     if (!holiday) await connection.query(`INSERT INTO public_holidays (holiday_date, name, region, active)
       VALUES (?, ?, 'default', TRUE)`, [fixture.holidayDate, fixture.holidayName])
+    const invoice = await one(connection, 'SELECT id FROM invoices WHERE invoice_number = ?', [fixture.invoiceNumber])
+    const leave = await one(connection, 'SELECT id FROM employee_leave_records WHERE source_reference = ?', [fixture.leaveReference])
+    const savedHoliday = await one(connection, 'SELECT id FROM public_holidays WHERE holiday_date = ? AND region = ?', [fixture.holidayDate, 'default'])
+    await writeShowcaseAudit(connection, actor, 'Demo showcase applied', Number(project.id), {
+      clientId: client.id, projectId: project.id, activityId: activity.id, classificationId: classification.id,
+      assignmentId: assignment.id, rateId: rate.id, timesheetId: timesheet.id, entryIds: entries.map((entry) => entry.id),
+      invoiceId: invoice?.id || null, leaveId: leave?.id || null, holidayId: savedHoliday?.id || null,
+    })
     await connection.commit()
     console.log('Showcase seeded: 3 billable approved entries, 1 finalized invoice, and small HR calendar examples. Existing accounts and timesheet hours were preserved.')
   } catch (error) {
@@ -141,7 +158,7 @@ export async function seedDemoShowcase(connection: PoolConnection) {
   }
 }
 
-export async function revertDemoShowcase(connection: PoolConnection, checkOnly = false) {
+export async function revertDemoShowcase(connection: PoolConnection, checkOnly = false, actor?: ShowcaseActor) {
   await connection.beginTransaction()
   try {
     const client = await one(connection, 'SELECT id, name, currency, active, billing_email AS billingEmail FROM clients WHERE code = ? FOR UPDATE', [fixture.clientCode])
@@ -215,6 +232,11 @@ export async function revertDemoShowcase(connection: PoolConnection, checkOnly =
     await connection.query('DELETE FROM clients WHERE id = ?', [client.id])
     if (leave) await connection.query('DELETE FROM employee_leave_records WHERE id = ?', [leave.id])
     if (holiday?.name === fixture.holidayName) await connection.query('DELETE FROM public_holidays WHERE id = ?', [holiday.id])
+    await writeShowcaseAudit(connection, actor, 'Demo showcase reverted', Number(project.id), {
+      clientId: client.id, projectId: project.id, activityId: activity.id, classificationId: classifications[0]?.id,
+      assignmentId: assignments[0]?.id, rateIds: rates.map((rate) => rate.id), entryIds: entries.map((entry) => entry.id),
+      invoiceId: invoice?.id || null, leaveId: leave?.id || null, holidayId: holiday?.id || null,
+    })
     await connection.commit()
     console.log('Showcase reverted. The 3 original internal entries were restored; fixture invoice, billing setup, leave, and holiday were removed.')
   } catch (error) {

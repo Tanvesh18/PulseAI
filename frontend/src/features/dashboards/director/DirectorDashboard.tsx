@@ -27,6 +27,7 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
   const [selectedApproval, setSelectedApproval] = useState<any>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState('')
+  const [noActivePeriod, setNoActivePeriod] = useState(false)
   const [retryNonce, setRetryNonce] = useState(0)
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({ search: '', role: '', entity: '' })
   const [auditPage, setAuditPage] = useState(1)
@@ -35,8 +36,9 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
 
   const loadDashboard = useCallback(async () => {
     const [overview, financialResult, auditResult] = await Promise.allSettled([api('/dashboard', token), api('/financial-report', token), api('/audit-events?page=1&pageSize=5', token)])
-    if (overview.status === 'fulfilled') { setDashboard(overview.value); setError('') }
-    else setError(overview.reason instanceof Error ? overview.reason.message : 'Unable to load the Director overview.')
+    if (overview.status === 'fulfilled') { setDashboard(overview.value); setNoActivePeriod(false); setError('') }
+    else if (overview.reason instanceof Error && overview.reason.message === 'No active reporting period found.') { setDashboard(null); setNoActivePeriod(true); setError('') }
+    else { setDashboard(null); setNoActivePeriod(false); setError(overview.reason instanceof Error ? overview.reason.message : 'Unable to load the Director overview.') }
     if (financialResult.status === 'fulfilled') setFinancial(financialResult.value)
     if (auditResult.status === 'fulfilled') setRecentAudit(auditResult.value.events || [])
   }, [token])
@@ -71,14 +73,15 @@ export function DirectorDashboard({ user, onSignOut }: { user: User; onSignOut: 
       <nav>{nav.map(([id, label, Icon]) => <button aria-current={tab === id ? 'page' : undefined} className={tab === id ? 'active' : ''} onClick={() => transitionWorkspace(() => { setTab(id); setSelectedDepartment(null); setSelectedApproval(null) })} key={id}><b><Icon size={17} /></b>{label}{id === 'exceptions' && metrics.exceptions > 0 && <i><LiveMetric value={metrics.exceptions} /></i>}</button>)}</nav>
       <div className="sidebar-footer"><div className="avatar">{user.name[0]}</div><div><strong>{user.name}</strong><small>Director</small></div><button onClick={onSignOut} aria-label="Sign out"><LogOut size={16} /></button></div>
     </aside>
-    <section className="director-content"><header className="content-header"><div><h1>{tab === 'overview' ? 'Executive overview' : tab[0].toUpperCase() + tab.slice(1)}</h1><p className="header-subtitle">{dashboard?.period || 'Current reporting period'} snapshot</p></div><button type="button" className="notification-status" onClick={() => transitionWorkspace(() => { setSelectedDepartment(null); setSelectedApproval(null); setTab('overview'); window.requestAnimationFrame(() => document.getElementById('director-notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) })} aria-label={`Show ${dashboard?.unreadNotificationCount || 0} unread notifications`}><Bell size={18} /><span>{dashboard?.unreadNotificationCount || 0}</span></button></header>
-      {error && <div className="director-error" role="alert"><span>{error}</span><button onClick={() => tab === 'overview' ? loadDashboard() : setRetryNonce((value) => value + 1)}>Try again</button></div>}
-      {!dashboard && !error && <div className="director-loading">Loading your organization workspace…</div>}
+    <section className="director-content"><header className="content-header"><div><h1>{tab === 'overview' ? 'Executive overview' : tab[0].toUpperCase() + tab.slice(1)}</h1><p className="header-subtitle">{noActivePeriod ? 'No active reporting period' : dashboard?.period || 'Current reporting period'} snapshot</p></div><button type="button" className="notification-status" onClick={() => transitionWorkspace(() => { setSelectedDepartment(null); setSelectedApproval(null); setTab('overview'); window.requestAnimationFrame(() => document.getElementById('director-notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) })} aria-label={`Show ${dashboard?.unreadNotificationCount || 0} unread notifications`}><Bell size={18} /><span>{dashboard?.unreadNotificationCount || 0}</span></button></header>
+      {noActivePeriod && <div className="director-error" role="status"><strong>No active reporting period</strong><p>Ask HR to open a reporting period covering today.</p></div>}
+       {error && !noActivePeriod && <div className="director-error" role="alert"><span>{error}</span><button onClick={() => tab === 'overview' ? loadDashboard() : setRetryNonce((value) => value + 1)}>Try again</button></div>}
+       {!dashboard && !error && !noActivePeriod && <div className="director-loading">Loading your organization workspace…</div>}
       {tab === 'overview' && dashboard && <DirectorOverview dashboard={dashboard} financial={financial} auditEvents={recentAudit} onDepartment={openDepartment} onNavigate={(nextTab) => transitionWorkspace(() => setTab(nextTab))} />}
-      {tab !== 'overview' && tabLoading && <div className="director-loading">Loading {tab}…</div>}
-      {tab === 'approvals' && !tabLoading && <Approvals rows={data?.submissions || []} onOpen={openApproval} />}
-      {tab === 'exceptions' && !tabLoading && <Exceptions rows={data?.exceptions || []} />}
-      {tab === 'reports' && !tabLoading && <Reports data={data} onDepartment={openDepartment} />}
+      {tab !== 'overview' && !noActivePeriod && tabLoading && <div className="director-loading">Loading {tab}…</div>}
+      {tab === 'approvals' && !noActivePeriod && !tabLoading && <Approvals rows={data?.submissions || []} onOpen={openApproval} />}
+      {tab === 'exceptions' && !noActivePeriod && !tabLoading && <Exceptions rows={data?.exceptions || []} />}
+      {tab === 'reports' && !noActivePeriod && !tabLoading && <Reports data={data} onDepartment={openDepartment} />}
       {tab === 'audit' && !tabLoading && <AuditWorkspace data={data} filters={auditFilters} onFilter={updateAuditFilters} onPage={setAuditPage} />}
       {selectedDepartment && <DepartmentPanel data={selectedDepartment} onClose={closeDepartment} />}
       {selectedApproval && <ApprovalPanel data={selectedApproval} loading={actionLoading} onClose={closeApproval} onDecision={decideApproval} />}

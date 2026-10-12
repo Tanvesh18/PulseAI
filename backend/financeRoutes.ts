@@ -1,6 +1,7 @@
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { randomUUID } from 'node:crypto'
+import { activeReportingPeriod } from './reportingPeriod.js'
 import { calculateLineAmount, csvCell, financeEntryCanBeInvoiced, financeCanProcessTimesheet, invoiceTransitionAllowed, validCurrency, type InvoiceStatus } from './financeRules.js'
 
 type FinanceRequest = Request & { actor?: { id: number; role: string; email: string } }
@@ -96,12 +97,15 @@ async function validateInvoiceSnapshot(connection: Pool | PoolConnection, invoic
   return { lines, problem: null as string | null }
 }
 
+function financeLockConflict(error: unknown) { return ['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT'].includes(String((error as { code?: string })?.code || '')) }
+
 export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: RequestHandler) {
   app.get('/api/finance/dashboard', financeGuard, async (_req: FinanceRequest, res: Response, next: NextFunction) => {
     try {
-      const [[period]] = await pool.query<RowDataPacket[]>("SELECT label AS periodLabel FROM reporting_periods WHERE active = TRUE ORDER BY starts_on DESC LIMIT 1")
-      const allEntries = await financeEntries(pool, { period: period?.periodLabel || '' })
-      const invoices = await pool.query<RowDataPacket[]>(`SELECT status, currency, COUNT(*) AS invoiceCount, SUM(subtotal) AS amount FROM invoices WHERE (? = '' OR period_label = ?) GROUP BY status, currency`, [period?.periodLabel || '', period?.periodLabel || ''])
+      const period = await activeReportingPeriod(pool)
+      if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
+      const allEntries = await financeEntries(pool, { period: period.label })
+      const invoices = await pool.query<RowDataPacket[]>(`SELECT status, currency, COUNT(*) AS invoiceCount, SUM(subtotal) AS amount FROM invoices WHERE (? = '' OR period_label = ?) GROUP BY status, currency`, [period.label, period.label])
       const invoiceGroups = (invoices[0] as RowDataPacket[]).reduce((groups: Record<string, any>, row) => { groups[row.status] ||= { count: 0, totals: [] }; groups[row.status].count += Number(row.invoiceCount); groups[row.status].totals.push({ currency: row.currency, amount: Number(row.amount || 0) }); return groups }, {})
       const byCurrency = new Map<string, number>()
       const exceptions = allEntries.filter((entry: any) => entry.exception).slice(0, 12)
@@ -111,7 +115,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
         if (entry.billable === false || entry.activityCategory === 'internal') nonBillableHours += entry.hours
       }
       const [notifications] = await pool.query<RowDataPacket[]>('SELECT id, title, message, read_at AS readAt, created_at AS createdAt, timesheet_id AS timesheetId FROM notifications WHERE recipient_email = ? ORDER BY created_at DESC LIMIT 20', [(_req as FinanceRequest).actor!.email])
-      return res.json({ period: period?.periodLabel || null, metrics: { approvedHoursAwaitingProcessing: awaitingHours, billableHours, nonBillableHours, unbilledHours, unbilledAmounts: [...byCurrency].map(([currency, amount]) => ({ currency, amount })), draftInvoices: invoiceGroups.draft || { count: 0, totals: [] }, readyInvoices: invoiceGroups.ready || { count: 0, totals: [] }, finalizedInvoices: invoiceGroups.finalized || { count: 0, totals: [] } }, exceptions, notifications })
+      return res.json({ period: period.label, metrics: { approvedHoursAwaitingProcessing: awaitingHours, billableHours, nonBillableHours, unbilledHours, unbilledAmounts: [...byCurrency].map(([currency, amount]) => ({ currency, amount })), draftInvoices: invoiceGroups.draft || { count: 0, totals: [] }, readyInvoices: invoiceGroups.ready || { count: 0, totals: [] }, finalizedInvoices: invoiceGroups.finalized || { count: 0, totals: [] } }, exceptions, notifications })
     } catch (error) { next(error) }
   })
 
@@ -141,25 +145,29 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
   })
 
   app.post('/api/finance/clients', financeGuard, async (req: FinanceRequest, res, next) => {
+    const connection = await pool.getConnection()
     try {
       const code = String(req.body?.code || '').trim().toUpperCase(); const name = String(req.body?.name || '').trim(); const currency = String(req.body?.currency || '').trim().toUpperCase(); const billingEmail = String(req.body?.billingEmail || '').trim()
       if (!/^[A-Z0-9][A-Z0-9_-]{1,39}$/.test(code) || name.length < 2 || name.length > 160 || !validCurrency(currency) || (billingEmail && !/^\S+@\S+\.\S+$/.test(billingEmail))) return res.status(400).json({ message: 'Provide a client code, name, three-letter currency, and valid optional billing email.' })
-      const [result] = await pool.query<ResultSetHeader>('INSERT INTO clients (code, name, billing_email, currency, created_by_user_id) VALUES (?, ?, ?, ?, ?)', [code, name, billingEmail || null, currency, req.actor!.id])
-      await writeFinanceAudit(pool, req.actor!.id, 'client_created', 'client', result.insertId, null, { code, name, billingEmail: billingEmail || null, currency, active: true })
-      return res.status(201).json({ message: 'Client created.', clientId: result.insertId })
-    } catch (error) { if ((error as any)?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That client code is already in use.' }); next(error) }
+      await connection.beginTransaction()
+      const [result] = await connection.query<ResultSetHeader>('INSERT INTO clients (code, name, billing_email, currency, created_by_user_id) VALUES (?, ?, ?, ?, ?)', [code, name, billingEmail || null, currency, req.actor!.id])
+      await writeFinanceAudit(connection, req.actor!.id, 'client_created', 'client', result.insertId, null, { code, name, billingEmail: billingEmail || null, currency, active: true })
+      await connection.commit(); return res.status(201).json({ message: 'Client created.', clientId: result.insertId })
+    } catch (error) { await connection.rollback(); if ((error as any)?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That client code is already in use.' }); next(error) } finally { connection.release() }
   })
 
   app.patch('/api/finance/clients/:id', financeGuard, async (req: FinanceRequest, res, next) => {
+    const connection = await pool.getConnection()
     try {
-      const clientId = Number(req.params.id); const [[before]] = await pool.query<RowDataPacket[]>('SELECT id, code, name, billing_email AS billingEmail, currency, active FROM clients WHERE id = ?', [clientId]); if (!before) return res.status(404).json({ message: 'Client not found.' })
+      await connection.beginTransaction()
+      const clientId = Number(req.params.id); const [[before]] = await connection.query<RowDataPacket[]>('SELECT id, code, name, billing_email AS billingEmail, currency, active FROM clients WHERE id = ? FOR UPDATE', [clientId]); if (!before) { await connection.rollback(); return res.status(404).json({ message: 'Client not found.' }) }
       const name = String(req.body?.name ?? before.name).trim(); const currency = String(req.body?.currency ?? before.currency).trim().toUpperCase(); const billingEmail = String(req.body?.billingEmail ?? before.billingEmail ?? '').trim(); const active = typeof req.body?.active === 'boolean' ? req.body.active : Boolean(before.active)
-      if (name.length < 2 || name.length > 160 || !validCurrency(currency) || (billingEmail && !/^\S+@\S+\.\S+$/.test(billingEmail))) return res.status(400).json({ message: 'Provide a client name, three-letter currency, and valid optional billing email.' })
-      if (currency !== before.currency) { const [[used]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices WHERE client_id = ? AND status = \'finalized\'', [clientId]); if (Number(used?.count || 0)) return res.status(409).json({ message: 'Currency cannot be changed after this client has finalized invoices.' }) }
-      await pool.query('UPDATE clients SET name = ?, billing_email = ?, currency = ?, active = ? WHERE id = ?', [name, billingEmail || null, currency, active, clientId])
-      const after = { ...before, name, billingEmail: billingEmail || null, currency, active }; await writeFinanceAudit(pool, req.actor!.id, 'client_updated', 'client', clientId, before, after)
-      return res.json({ message: 'Client billing profile updated.' })
-    } catch (error) { next(error) }
+      if (name.length < 2 || name.length > 160 || !validCurrency(currency) || (billingEmail && !/^\S+@\S+\.\S+$/.test(billingEmail))) { await connection.rollback(); return res.status(400).json({ message: 'Provide a client name, three-letter currency, and valid optional billing email.' }) }
+      if (currency !== before.currency) { const [[used]] = await connection.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices WHERE client_id = ? AND status = \'finalized\'', [clientId]); if (Number(used?.count || 0)) { await connection.rollback(); return res.status(409).json({ message: 'Currency cannot be changed after this client has finalized invoices.' }) } }
+      await connection.query('UPDATE clients SET name = ?, billing_email = ?, currency = ?, active = ? WHERE id = ?', [name, billingEmail || null, currency, active, clientId])
+      const after = { ...before, name, billingEmail: billingEmail || null, currency, active }; await writeFinanceAudit(connection, req.actor!.id, 'client_updated', 'client', clientId, before, after)
+      await connection.commit(); return res.json({ message: 'Client billing profile updated.' })
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.get('/api/finance/projects', financeGuard, async (_req, res, next) => {
@@ -194,29 +202,33 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
   })
 
   app.patch('/api/finance/projects/:id/client', financeGuard, async (req: FinanceRequest, res, next) => {
+    const connection = await pool.getConnection()
     try {
+      await connection.beginTransaction()
       const projectId = Number(req.params.id); const clientId = req.body?.clientId == null || req.body.clientId === '' ? null : Number(req.body.clientId)
-      const [[before]] = await pool.query<RowDataPacket[]>('SELECT id, client_id AS clientId FROM projects WHERE id = ?', [projectId]); if (!before) return res.status(404).json({ message: 'Project not found.' })
-      if (clientId != null) { const [[client]] = await pool.query<RowDataPacket[]>('SELECT id, active FROM clients WHERE id = ?', [clientId]); if (!client || !client.active) return res.status(400).json({ message: 'Choose an active client.' }) }
-      const [[finalized]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices WHERE client_id = ? AND status = \'finalized\' AND id IN (SELECT invoice_id FROM invoice_lines WHERE project_id = ?)', [before.clientId || 0, projectId])
-      if (Number(finalized?.count || 0) && Number(before.clientId) !== Number(clientId)) return res.status(409).json({ message: 'Project client cannot be changed after finalized invoices reference it.' })
-      await pool.query('UPDATE projects SET client_id = ? WHERE id = ?', [clientId, projectId]); await writeFinanceAudit(pool, req.actor!.id, 'project_client_changed', 'project', projectId, { clientId: before.clientId }, { clientId })
-      return res.json({ message: 'Project client configuration updated.' })
-    } catch (error) { next(error) }
+      const [[before]] = await connection.query<RowDataPacket[]>('SELECT id, client_id AS clientId FROM projects WHERE id = ? FOR UPDATE', [projectId]); if (!before) { await connection.rollback(); return res.status(404).json({ message: 'Project not found.' }) }
+      if (clientId != null) { const [[client]] = await connection.query<RowDataPacket[]>('SELECT id, active FROM clients WHERE id = ?', [clientId]); if (!client || !client.active) { await connection.rollback(); return res.status(400).json({ message: 'Choose an active client.' }) } }
+      const [[finalized]] = await connection.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices WHERE client_id = ? AND status = \'finalized\' AND id IN (SELECT invoice_id FROM invoice_lines WHERE project_id = ?)', [before.clientId || 0, projectId])
+      if (Number(finalized?.count || 0) && Number(before.clientId) !== Number(clientId)) { await connection.rollback(); return res.status(409).json({ message: 'Project client cannot be changed after finalized invoices reference it.' }) }
+      await connection.query('UPDATE projects SET client_id = ? WHERE id = ?', [clientId, projectId]); await writeFinanceAudit(connection, req.actor!.id, 'project_client_changed', 'project', projectId, { clientId: before.clientId }, { clientId })
+      await connection.commit(); return res.json({ message: 'Project client configuration updated.' })
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.patch('/api/finance/projects/:projectId/activities/:activityId', financeGuard, async (req: FinanceRequest, res, next) => {
+    const connection = await pool.getConnection()
     try {
+      await connection.beginTransaction()
       const projectId = Number(req.params.projectId); const activityId = Number(req.params.activityId); const billable = req.body?.billable
-      if (billable !== true && billable !== false && billable !== null) return res.status(400).json({ message: 'Set the activity classification to billable, non-billable, or unclassified.' })
-      const [[before]] = await pool.query<RowDataPacket[]>('SELECT pa.billable, a.category FROM project_activity_assignments pa JOIN activities a ON a.id = pa.activity_id WHERE pa.project_id = ? AND pa.activity_id = ?', [projectId, activityId]); if (!before) return res.status(404).json({ message: 'Project activity not found.' })
-      if (before.category !== 'project' && billable === true) return res.status(400).json({ message: 'Internal activities cannot be classified as billable.' })
-      const [[finalized]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices i JOIN invoice_lines il ON il.invoice_id = i.id JOIN timesheet_entries e ON e.id = il.timesheet_entry_id WHERE i.status = \'finalized\' AND il.project_id = ? AND e.activity_id = ?', [projectId, activityId])
-      if (Number(finalized?.count || 0) && Boolean(before.billable) !== Boolean(billable)) return res.status(409).json({ message: 'Classification on finalized invoice work is immutable.' })
-      await pool.query('UPDATE project_activity_assignments SET billable = ? WHERE project_id = ? AND activity_id = ?', [billable, projectId, activityId])
-      await writeFinanceAudit(pool, req.actor!.id, 'activity_classification_changed', 'project_activity', activityId, { projectId, billable: before.billable }, { projectId, billable })
-      return res.json({ message: 'Financial activity classification updated.' })
-    } catch (error) { next(error) }
+      if (billable !== true && billable !== false && billable !== null) { await connection.rollback(); return res.status(400).json({ message: 'Set the activity classification to billable, non-billable, or unclassified.' }) }
+      const [[before]] = await connection.query<RowDataPacket[]>('SELECT pa.billable, a.category FROM project_activity_assignments pa JOIN activities a ON a.id = pa.activity_id WHERE pa.project_id = ? AND pa.activity_id = ? FOR UPDATE', [projectId, activityId]); if (!before) { await connection.rollback(); return res.status(404).json({ message: 'Project activity not found.' }) }
+      if (before.category !== 'project' && billable === true) { await connection.rollback(); return res.status(400).json({ message: 'Internal activities cannot be classified as billable.' }) }
+      const [[finalized]] = await connection.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoices i JOIN invoice_lines il ON il.invoice_id = i.id JOIN timesheet_entries e ON e.id = il.timesheet_entry_id WHERE i.status = \'finalized\' AND il.project_id = ? AND e.activity_id = ?', [projectId, activityId])
+      if (Number(finalized?.count || 0) && Boolean(before.billable) !== Boolean(billable)) { await connection.rollback(); return res.status(409).json({ message: 'Classification on finalized invoice work is immutable.' }) }
+      await connection.query('UPDATE project_activity_assignments SET billable = ? WHERE project_id = ? AND activity_id = ?', [billable, projectId, activityId])
+      await writeFinanceAudit(connection, req.actor!.id, 'activity_classification_changed', 'project_activity', activityId, { projectId, billable: before.billable }, { projectId, billable })
+      await connection.commit(); return res.json({ message: 'Financial activity classification updated.' })
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.post('/api/finance/projects/:id/rates', financeGuard, async (req: FinanceRequest, res, next) => {
@@ -244,7 +256,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       if (previousOpen) await writeFinanceAudit(connection, req.actor!.id, 'billing_rate_ended', 'billing_rate', Number(previousOpen.id), previousOpen, { ...previousOpen, effectiveTo: previousEndDate, active: false })
       await writeFinanceAudit(connection, req.actor!.id, 'billing_rate_created', 'billing_rate', result.insertId, null, after)
       await connection.commit(); return res.status(201).json({ message: 'Effective-dated billing rate created.', rateId: result.insertId })
-    } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.patch('/api/finance/rates/:id/active', financeGuard, async (req: FinanceRequest, res, next) => {
@@ -252,16 +264,23 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
     try {
       const rateId = Number(req.params.id); const active = req.body?.active
       if (typeof active !== 'boolean') return res.status(400).json({ message: 'Provide an active state.' })
-      await connection.beginTransaction(); const [[before]] = await connection.query<RowDataPacket[]>('SELECT id, project_id AS projectId, amount, currency, DATE_FORMAT(effective_from, \'%Y-%m-%d\') AS effectiveFrom, DATE_FORMAT(effective_to, \'%Y-%m-%d\') AS effectiveTo, active FROM project_billing_rates WHERE id = ? FOR UPDATE', [rateId])
+      await connection.beginTransaction()
+      const [[target]] = await connection.query<RowDataPacket[]>('SELECT project_id AS projectId FROM project_billing_rates WHERE id = ?', [rateId])
+      if (!target) { await connection.rollback(); return res.status(404).json({ message: 'Billing rate not found.' }) }
+      const [[project]] = await connection.query<RowDataPacket[]>('SELECT p.id, c.currency FROM projects p LEFT JOIN clients c ON c.id = p.client_id WHERE p.id = ? FOR UPDATE', [target.projectId])
+      const [rates] = await connection.query<RowDataPacket[]>("SELECT id, project_id AS projectId, amount, currency, DATE_FORMAT(effective_from, '%Y-%m-%d') AS effectiveFrom, DATE_FORMAT(effective_to, '%Y-%m-%d') AS effectiveTo, active FROM project_billing_rates WHERE project_id = ? ORDER BY effective_from DESC FOR UPDATE", [target.projectId])
+      const before = rates.find((rate) => Number(rate.id) === rateId)
       if (!before) { await connection.rollback(); return res.status(404).json({ message: 'Billing rate not found.' }) }
-      const [[finalized]] = await connection.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.billing_rate_id = ? AND i.status = \'finalized\'', [rateId])
+      if (active && (!project?.currency || before.currency !== project.currency)) { await connection.rollback(); return res.status(409).json({ message: 'Rate currency must match the linked client currency.' }) }
+      if (active && rates.some((rate) => Number(rate.id) !== rateId && String(before.effectiveFrom) <= String(rate.effectiveTo || '9999-12-31'))) { await connection.rollback(); return res.status(409).json({ message: 'Reactivating this rate would overlap another effective billing rate.' }) }
+      const [[finalized]] = await connection.query<RowDataPacket[]>("SELECT COUNT(*) AS count FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.billing_rate_id = ? AND i.status = 'finalized'", [rateId])
       if (!active && Number(finalized?.count || 0) && String(before.effectiveFrom) >= new Date().toISOString().slice(0, 10)) { await connection.rollback(); return res.status(409).json({ message: 'This rate is referenced by finalized work and cannot be deactivated for that effective date.' }) }
-      const endDate = !active && !before.effectiveTo ? new Date(Date.now() - 86400000).toISOString().slice(0, 10) : before.effectiveTo
+      const endDate = active ? null : !before.effectiveTo ? new Date(Date.now() - 86400000).toISOString().slice(0, 10) : before.effectiveTo
       if (!active && endDate < before.effectiveFrom) { await connection.rollback(); return res.status(409).json({ message: 'A rate cannot end before its effective-from date.' }) }
       await connection.query('UPDATE project_billing_rates SET active = ?, effective_to = ? WHERE id = ?', [active, endDate, rateId])
       await writeFinanceAudit(connection, req.actor!.id, 'billing_rate_state_changed', 'billing_rate', rateId, before, { ...before, active, effectiveTo: endDate })
       await connection.commit(); return res.json({ message: active ? 'Billing rate activated.' : 'Billing rate ended; historical dates remain traceable.' })
-    } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.get('/api/finance/exceptions', financeGuard, async (_req, res, next) => {
@@ -345,7 +364,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       await connection.query('UPDATE invoices SET status = \'ready\', ready_at = NOW(), version = version + 1 WHERE id = ? AND status = \'draft\'', [invoice.id])
       await writeFinanceAudit(connection, req.actor!.id, 'invoice_marked_ready', 'invoice', Number(invoice.id), { status: invoice.status }, { status: 'ready', lineCount: lines.length })
       await connection.commit(); return res.json({ message: 'Invoice is ready for final review.' })
-    } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.post('/api/finance/invoices/:id/finalize', financeGuard, async (req: FinanceRequest, res, next) => {
@@ -358,7 +377,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       if (!result.affectedRows) { await connection.rollback(); return res.status(409).json({ message: 'Invoice status changed during finalization. Reload and review it.' }) }
       await writeFinanceAudit(connection, req.actor!.id, 'invoice_finalized', 'invoice', Number(invoice.id), { status: invoice.status }, { status: 'finalized', subtotal: Number(invoice.subtotal), currency: invoice.currency, lineCount: lines.length })
       await connection.commit(); return res.json({ message: `${invoice.invoiceNumber} finalized and locked.` })
-    } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.delete('/api/finance/invoices/:id', financeGuard, async (req: FinanceRequest, res, next) => {
@@ -371,7 +390,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       await connection.query('DELETE FROM invoice_lines WHERE invoice_id = ?', [invoice.id])
       await connection.query('UPDATE invoices SET status = \'cancelled\', cancelled_line_count = ?, version = version + 1 WHERE id = ? AND status = \'draft\'', [lines.length, invoice.id])
       await connection.commit(); return res.json({ message: 'Draft cancelled; its approved entries are available for a new draft.' })
-    } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.get('/api/finance/audit', financeGuard, async (_req, res, next) => {
@@ -384,7 +403,17 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
   })
 
   app.post('/api/finance/notifications/:id/read', financeGuard, async (req: FinanceRequest, res, next) => {
-    try { const [result] = await pool.query<ResultSetHeader>('UPDATE notifications SET read_at = COALESCE(read_at, NOW()) WHERE id = ? AND recipient_email = ?', [req.params.id, req.actor!.email]); if (!result.affectedRows) return res.status(404).json({ message: 'Notification not found.' }); return res.json({ message: 'Notification marked as read.' }) } catch (error) { next(error) }
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [[notice]] = await connection.query<RowDataPacket[]>('SELECT id, read_at AS readAt FROM notifications WHERE id = ? AND recipient_email = ? FOR UPDATE', [req.params.id, req.actor!.email])
+      if (!notice) { await connection.rollback(); return res.status(404).json({ message: 'Notification not found.' }) }
+      if (!notice.readAt) {
+        await connection.query('UPDATE notifications SET read_at = NOW() WHERE id = ?', [notice.id])
+        await writeFinanceAudit(connection, req.actor!.id, 'notification_marked_read', 'notification', Number(notice.id), { readAt: null }, { read: true })
+      }
+      await connection.commit(); return res.json({ message: 'Notification marked as read.' })
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Notification changed during another action. Retry.' }); next(error) } finally { connection.release() }
   })
 
   app.get('/api/finance/exports/:kind', financeGuard, async (req, res, next) => {
