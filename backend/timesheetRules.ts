@@ -10,3 +10,14 @@ export function versionMatches(expectedVersion: unknown, currentVersion: number)
 export function isAllowedTransition(from: TimesheetStatus, to: TimesheetStatus) {
   return (from === 'draft' && to === 'submitted') || (from === 'submitted' && (to === 'approved' || to === 'returned')) || (from === 'returned' && to === 'resubmitted') || (from === 'resubmitted' && (to === 'approved' || to === 'returned'))
 }
+
+export function managerApprovalIntegrityValid(totalHours: unknown, entryCount: unknown, entryHours: unknown, criticalCount: unknown) {
+  const storedTotal = Number(totalHours)
+  const summedHours = Number(entryHours)
+  return Number(entryCount) > 0 && Number.isFinite(storedTotal) && Number.isFinite(summedHours) && summedHours === storedTotal && Number(criticalCount) === 0
+}
+
+export function validEntryHours(value: unknown) {
+  const hours = Number(value)
+  return Number.isFinite(hours) && hours > 0 && hours <= 24 && Number.isInteger(hours * 4)
+}

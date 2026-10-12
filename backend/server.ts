@@ -1,13 +1,13 @@
 import 'dotenv/config'
 import cors from 'cors'
 import express, { type NextFunction, type Request, type Response } from 'express'
-import mysql, { type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
+import mysql, { type PoolConnection, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
-import { employeeCanEdit, employeeCanSubmit, managerCanDecide, validReturnReason, versionMatches } from './timesheetRules.js'
+import { employeeCanEdit, employeeCanSubmit, managerCanDecide, managerApprovalIntegrityValid, validEntryHours, validReturnReason, versionMatches } from './timesheetRules.js'
 import { registerFinanceRoutes } from './financeRoutes.js'
 import { openApiSpec } from './openapi.js'
 import { seedDemoShowcase, revertDemoShowcase } from './scripts/demoShowcase.js'
@@ -242,6 +242,20 @@ async function initializeDatabase() {
   await pool.query('ALTER TABLE timesheets ADD COLUMN reviewer_user_id BIGINT UNSIGNED NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheets ADD COLUMN return_reason VARCHAR(500) NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheets ADD COLUMN version INT UNSIGNED NOT NULL DEFAULT 1').catch(ignoreKnownMigrationError)
+  await pool.query('ALTER TABLE timesheet_entries ADD COLUMN project_key BIGINT UNSIGNED GENERATED ALWAYS AS (COALESCE(project_id, 0)) STORED').catch(ignoreKnownMigrationError)
+  const [entryIndexes] = await pool.query<RowDataPacket[]>("SHOW INDEX FROM timesheet_entries WHERE Key_name = 'uq_timesheet_entry_day_project_activity'")
+  if (!entryIndexes.length) {
+    const [duplicates] = await pool.query<RowDataPacket[]>("SELECT timesheet_id AS timesheetId, DATE_FORMAT(entry_date, '%Y-%m-%d') AS entryDate, COALESCE(project_id, 0) AS projectKey, activity_id AS activityId, COUNT(*) AS count FROM timesheet_entries GROUP BY timesheet_id, entry_date, COALESCE(project_id, 0), activity_id HAVING COUNT(*) > 1 LIMIT 20")
+    if (duplicates.length) console.error('Timesheet entry unique index skipped: existing duplicate entries require review.', duplicates)
+    else {
+      try { await pool.query('ALTER TABLE timesheet_entries ADD UNIQUE KEY uq_timesheet_entry_day_project_activity (timesheet_id, entry_date, project_key, activity_id)') }
+      catch (error) {
+        const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+        if (code === 'ER_DUP_ENTRY') console.error('Timesheet entry unique index skipped: duplicate entries were added during initialization.', error)
+        else if (code !== 'ER_DUP_KEYNAME') throw error
+      }
+    }
+  }
   await pool.query('ALTER TABLE timesheet_entries ADD COLUMN manager_comment VARCHAR(500) NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheet_entries ADD COLUMN manager_comment_by_user_id BIGINT UNSIGNED NULL').catch(ignoreKnownMigrationError)
   await pool.query('ALTER TABLE timesheet_entries ADD COLUMN manager_comment_at TIMESTAMP NULL').catch(ignoreKnownMigrationError)
@@ -727,9 +741,9 @@ const requireManager = requireRole('manager')
 const requireHR = requireRole('hr')
 const requireFinance = requireRole('finance')
 
-async function employeeForActor(actor: NonNullable<AuthenticatedRequest['actor']>) {
-  const [employees] = await pool.query<RowDataPacket[]>('SELECT e.id, e.user_id AS userId, e.employee_code AS employeeCode, e.name, e.email, e.region, e.manager_name AS managerName, e.manager_user_id AS managerUserId, d.name AS department FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.active = TRUE AND (e.user_id = ? OR (e.user_id IS NULL AND LOWER(e.email) = LOWER(?))) LIMIT 1', [actor.id, actor.email])
-  if (employees[0] && !employees[0].userId) await pool.query('UPDATE employees SET user_id = ? WHERE id = ? AND user_id IS NULL', [actor.id, employees[0].id]).catch(ignoreKnownMigrationError)
+async function employeeForActor(actor: NonNullable<AuthenticatedRequest['actor']>, executor: PoolConnection | typeof pool = pool) {
+  const [employees] = await executor.query<RowDataPacket[]>('SELECT e.id, e.user_id AS userId, e.employee_code AS employeeCode, e.name, e.email, e.region, e.manager_name AS managerName, e.manager_user_id AS managerUserId, d.name AS department FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.active = TRUE AND (e.user_id = ? OR (e.user_id IS NULL AND LOWER(e.email) = LOWER(?))) LIMIT 1', [actor.id, actor.email])
+  if (employees[0] && !employees[0].userId) await executor.query('UPDATE employees SET user_id = ? WHERE id = ? AND user_id IS NULL', [actor.id, employees[0].id]).catch(ignoreKnownMigrationError)
   return employees[0]
 }
 
@@ -737,16 +751,26 @@ async function writeWorkflowAudit(executor: mysql.Pool | mysql.PoolConnection, a
   await executor.query('INSERT INTO audit_events (actor_name, actor_user_id, actor_role, action, target, entity_type, entity_id, before_state, after_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [actor.email, actor.id, actor.role, action, target, entityType, entityId, beforeState == null ? null : JSON.stringify(beforeState), afterState == null ? null : JSON.stringify(afterState)])
 }
 
-async function activeReportingPeriod() {
+async function activeReportingPeriod(today = businessDate(), executor: PoolConnection | typeof pool = pool) {
   // DATE columns must remain calendar dates. Returning them as JavaScript Date objects
   // shifts them in UTC+05:30 and can make a valid September entry appear to be August.
-  const today = businessDate()
-  const [periods] = await pool.query<RowDataPacket[]>("SELECT id, label, DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn, DATE_FORMAT(submission_deadline, '%Y-%m-%d') AS submissionDeadline, standard_daily_hours AS standardDailyHours FROM reporting_periods WHERE active = TRUE AND starts_on <= ? ORDER BY starts_on DESC LIMIT 1", [today])
+  const [periods] = await executor.query<RowDataPacket[]>("SELECT id, label, DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn, DATE_FORMAT(submission_deadline, '%Y-%m-%d') AS submissionDeadline, standard_daily_hours AS standardDailyHours FROM reporting_periods WHERE active = TRUE AND starts_on <= ? AND ends_on >= ? ORDER BY starts_on DESC, id DESC LIMIT 1", [today, today])
   return periods[0]
 }
 
-async function employeeCycleIsClosed(periodLabel: string) {
-  const [cycles] = await pool.query<RowDataPacket[]>('SELECT current_stage AS currentStage FROM billing_cycles WHERE period_label = ? LIMIT 1', [periodLabel])
+async function directorReportingPeriod(): Promise<RowDataPacket> {
+  const today = businessDate()
+  const [periods] = await pool.query<RowDataPacket[]>("SELECT id, label, DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn, DATE_FORMAT(submission_deadline, '%Y-%m-%d') AS submissionDeadline, standard_daily_hours AS standardDailyHours FROM reporting_periods WHERE active = TRUE AND starts_on <= ? AND ends_on >= ? ORDER BY starts_on DESC, id DESC LIMIT 1", [today, today])
+  if (periods[0]) return periods[0]
+  const year = Number(today.slice(0, 4))
+  const month = Number(today.slice(5, 7))
+  const label = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(year, month - 1, 1)))
+  const endsOn = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+  return { id: 0, label, startsOn: today.slice(0, 7) + '-01', endsOn, submissionDeadline: null, standardDailyHours: 8 } as RowDataPacket
+}
+
+async function employeeCycleIsClosed(periodLabel: string, executor: PoolConnection | typeof pool = pool) {
+  const [cycles] = await executor.query<RowDataPacket[]>('SELECT current_stage AS currentStage FROM billing_cycles WHERE period_label = ? LIMIT 1', [periodLabel])
   return cycles[0]?.currentStage === 'oracle_export'
 }
 
@@ -762,8 +786,8 @@ function reportingDeadlinePassed(period: RowDataPacket) {
   return Boolean(deadline && businessDate() > deadline)
 }
 
-async function employeePeriodIsLocked(period: RowDataPacket) {
-  return reportingDeadlinePassed(period) || await employeeCycleIsClosed(period.label)
+async function employeePeriodIsLocked(period: RowDataPacket, executor: PoolConnection | typeof pool = pool) {
+  return reportingDeadlinePassed(period) || await employeeCycleIsClosed(period.label, executor)
 }
 
 app.get('/api/hr/overview', requireHR, async (_req: AuthenticatedRequest, res, next) => {
@@ -946,7 +970,7 @@ function managerDailyHoursWarningThreshold() {
 
 function isWeekday(date: string) { const day = new Date(`${date}T00:00:00Z`).getUTCDay(); return day !== 0 && day !== 6 }
 
-async function missingWorkdaysForMembers(members: RowDataPacket[], period: RowDataPacket) {
+async function missingWorkdaysForMembers(members: RowDataPacket[], period: RowDataPacket, throughDate = String(period.endsOn)) {
   const result = new Map<number, string[]>()
   if (!members.length) return result
   const employeeIds = members.map((member) => Number(member.id))
@@ -973,7 +997,7 @@ async function missingWorkdaysForMembers(members: RowDataPacket[], period: RowDa
     const memberLeave = leaveByEmployee.get(Number(member.id)) || []
     const entryDates = entriesByTimesheet.get(Number(member.timesheetId || 0)) || new Set<string>()
     const holidayDates = new Set(holidays.filter((row) => row.region === 'default' || row.region === member.region).map((row) => String(row.day).slice(0, 10)))
-    for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${String(period.endsOn).slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) {
+    for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${String(throughDate < period.endsOn ? throughDate : period.endsOn).slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) {
       const day = date.toISOString().slice(0, 10)
       const onLeave = memberLeave.some((row) => day >= String(row.startsOn).slice(0, 10) && day <= String(row.endsOn).slice(0, 10))
       if (isWeekday(day) && !holidayDates.has(day) && !onLeave && !entryDates.has(day)) missing.push(day)
@@ -989,7 +1013,7 @@ async function directorMissingWorkdayExceptions(period: RowDataPacket) {
     FROM employees e JOIN departments d ON d.id = e.department_id LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ?
     WHERE e.active = TRUE ORDER BY e.name`, [period.id])
   const exceptions: any[] = []
-  const missingByEmployee = await missingWorkdaysForMembers(members, period)
+  const missingByEmployee = await missingWorkdaysForMembers(members, period, businessDate())
   for (const member of members) {
     const shouldCheckDays = !member.timesheetId || member.status === 'draft' || Number(member.entryCount) > 0
     if (!shouldCheckDays) continue
@@ -1010,23 +1034,38 @@ async function ownedTimesheet(employeeId: number, period: RowDataPacket, create 
   return created[0]
 }
 
-async function syncTimesheetTotal(timesheetId: number) {
-  const [[sum]] = await pool.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ?', [timesheetId])
-  await pool.query('UPDATE timesheets SET total_hours = ?, version = version + 1 WHERE id = ?', [sum?.total || 0, timesheetId])
+async function lockedOwnedTimesheet(connection: PoolConnection, employeeId: number, period: RowDataPacket, create = false) {
+  if (create) await connection.query("INSERT INTO timesheets (employee_id, reporting_period_id, period_label, total_hours, status) VALUES (?, ?, ?, 0, 'draft') ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)", [employeeId, period.id, period.label])
+  const [rows] = await connection.query<RowDataPacket[]>('SELECT * FROM timesheets WHERE employee_id = ? AND reporting_period_id = ? LIMIT 1 FOR UPDATE', [employeeId, period.id])
+  return rows[0]
+}
+
+async function syncTimesheetTotal(timesheetId: number, connection: PoolConnection | typeof pool = pool) {
+  const [[sum]] = await connection.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ?', [timesheetId])
+  await connection.query('UPDATE timesheets SET total_hours = ?, version = version + 1 WHERE id = ?', [sum?.total || 0, timesheetId])
+}
+
+function employeeWriteConflict(error: unknown): { status: number; message: string } | null {
+  const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+  if (code === 'ER_DUP_ENTRY') return { status: 409, message: 'An entry already exists for this date, project, and activity.' }
+  if (code === 'ER_LOCK_DEADLOCK' || code === 'ER_LOCK_WAIT_TIMEOUT') return { status: 409, message: 'The timesheet changed during your request. Refresh and try again.' }
+  return null
 }
 
 app.get('/api/employee/timesheet', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
   try {
     const employee = await employeeForActor(req.actor!)
-    const period = await activeReportingPeriod()
-    if (!employee || !period) return res.status(404).json({ message: 'No active employee or reporting period found.' })
+    const businessToday = businessDate()
+    const period = await activeReportingPeriod(businessToday)
+    if (!employee) return res.status(403).json({ message: 'Your employee record is not active.' })
+    if (!period) return res.status(404).json({ message: 'No active reporting period is open. Contact HR for the next period.' })
     const timesheet = await ownedTimesheet(employee.id, period)
     const [entries] = timesheet ? await pool.query<RowDataPacket[]>(`SELECT e.id, DATE_FORMAT(e.entry_date, '%Y-%m-%d') AS entryDate, e.project_id AS projectId, p.code AS projectCode, p.name AS projectName, e.activity_id AS activityId, a.name AS activityName, a.category AS activityCategory, e.hours, e.work_description AS workDescription, e.manager_comment AS managerComment FROM timesheet_entries e LEFT JOIN projects p ON p.id = e.project_id JOIN activities a ON a.id = e.activity_id WHERE e.timesheet_id = ? ORDER BY e.entry_date, e.id`, [timesheet.id]) : [[]]
     const [projects] = await pool.query<RowDataPacket[]>(`SELECT p.id, p.code, p.name FROM employee_project_assignments a JOIN projects p ON p.id = a.project_id
-      WHERE a.employee_id = ? AND a.active = TRUE AND p.active = TRUE AND (a.starts_on IS NULL OR a.starts_on <= CURDATE()) AND (a.ends_on IS NULL OR a.ends_on >= CURDATE()) ORDER BY p.name`, [employee.id])
+      WHERE a.employee_id = ? AND a.active = TRUE AND p.active = TRUE AND (a.starts_on IS NULL OR a.starts_on <= ?) AND (a.ends_on IS NULL OR a.ends_on >= ?) ORDER BY p.name`, [employee.id, businessToday, businessToday])
     const [activities] = await pool.query<RowDataPacket[]>("SELECT id, name, category FROM activities WHERE active = TRUE AND category = 'internal' ORDER BY name")
     const [projectActivities] = await pool.query<RowDataPacket[]>(`SELECT pa.project_id AS projectId, a.id, a.name, a.category FROM project_activity_assignments pa JOIN activities a ON a.id = pa.activity_id
-      JOIN projects p ON p.id = pa.project_id JOIN employee_project_assignments ep ON ep.project_id = pa.project_id WHERE ep.employee_id = ? AND ep.active = TRUE AND p.active = TRUE AND pa.active = TRUE AND a.active = TRUE AND (ep.starts_on IS NULL OR ep.starts_on <= CURDATE()) AND (ep.ends_on IS NULL OR ep.ends_on >= CURDATE()) ORDER BY pa.project_id, a.name`, [employee.id])
+      JOIN projects p ON p.id = pa.project_id JOIN employee_project_assignments ep ON ep.project_id = pa.project_id WHERE ep.employee_id = ? AND ep.active = TRUE AND p.active = TRUE AND pa.active = TRUE AND a.active = TRUE AND (ep.starts_on IS NULL OR ep.starts_on <= ?) AND (ep.ends_on IS NULL OR ep.ends_on >= ?) ORDER BY pa.project_id, a.name`, [employee.id, businessToday, businessToday])
     const [holidays] = await pool.query<RowDataPacket[]>("SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d') AS holidayDate, name FROM public_holidays WHERE active = TRUE AND holiday_date BETWEEN ? AND ? AND (region = 'default' OR region = ?)", [period.startsOn, period.endsOn, employee.region])
     const [leave] = await pool.query<RowDataPacket[]>("SELECT DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn, leave_type AS leaveType FROM employee_leave_records WHERE employee_id = ? AND status = 'approved' AND ends_on >= ? AND starts_on <= ?", [employee.id, period.startsOn, period.endsOn])
     const [audit] = timesheet ? await pool.query<RowDataPacket[]>('SELECT event_type AS eventType, detail, created_at AS createdAt FROM timesheet_audit_events WHERE timesheet_id = ? ORDER BY created_at DESC LIMIT 20', [timesheet.id]) : [[]]
@@ -1034,92 +1073,100 @@ app.get('/api/employee/timesheet', requireEmployee, async (req: AuthenticatedReq
     const [cycles] = await pool.query<RowDataPacket[]>("SELECT period_label AS periodLabel, DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn, DATE_FORMAT(submission_deadline, '%Y-%m-%d') AS submissionDeadline, current_stage AS currentStage FROM billing_cycles WHERE period_label = ? LIMIT 1", [period.label])
     const [history] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.period_label AS periodLabel, t.total_hours AS totalHours, t.status, t.submitted_at AS submittedAt, t.approved_at AS approvedAt, t.return_reason AS returnReason, reviewer.name AS reviewerName
       FROM timesheets t LEFT JOIN users reviewer ON reviewer.id = t.reviewer_user_id WHERE t.employee_id = ? ORDER BY COALESCE(t.reporting_period_id, 0) DESC, t.updated_at DESC LIMIT 24`, [employee.id])
-    return res.json({ employee, period, billingCycle: cycles[0] || null, timesheet: timesheet ? { id: timesheet.id, status: timesheet.status, totalHours: timesheet.total_hours, returnReason: timesheet.return_reason, submittedAt: timesheet.submitted_at, reviewerName: timesheet.reviewer_user_id ? (history.find((item) => item.id === timesheet.id)?.reviewerName || null) : null, version: timesheet.version } : null, entries, projects, activities, projectActivities, holidays, leave, audit, notifications, history })
+    return res.json({ employee, period, businessDate: businessToday, billingCycle: cycles[0] || null, timesheet: timesheet ? { id: timesheet.id, status: timesheet.status, totalHours: timesheet.total_hours, returnReason: timesheet.return_reason, submittedAt: timesheet.submitted_at, reviewerName: timesheet.reviewer_user_id ? (history.find((item) => item.id === timesheet.id)?.reviewerName || null) : null, version: timesheet.version } : null, entries, projects, activities, projectActivities, holidays, leave, audit, notifications, history })
   } catch (error) { next(error) }
 })
 
 app.post('/api/employee/timesheet/entries', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const employee = await employeeForActor(req.actor!); const period = await activeReportingPeriod()
+    const employee = await employeeForActor(req.actor!, connection); const period = await activeReportingPeriod(businessDate(), connection)
     if (!employee || !period) return res.status(404).json({ message: 'No active employee or reporting period found.' })
-    if (await employeePeriodIsLocked(period)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
+    if (await employeePeriodIsLocked(period, connection)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
     const entryDate = String(req.body?.entryDate || ''); const projectId = req.body?.projectId ? Number(req.body.projectId) : null; const activityId = Number(req.body?.activityId); const hours = Number(req.body?.hours); const workDescription = String(req.body?.workDescription || '').trim()
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < String(period.startsOn).slice(0, 10) || entryDate > String(period.endsOn).slice(0, 10)) return res.status(400).json({ message: 'Choose a workday within the active reporting period.' })
-    if (!isWeekday(entryDate) || !Number.isFinite(hours) || hours <= 0 || hours > 24 || !Number.isInteger(activityId)) return res.status(400).json({ message: 'Enter a valid weekday, activity, and hours between 0 and 24.' })
-    const timesheet = await ownedTimesheet(employee.id, period, true)
-    if (!timesheet) return res.status(500).json({ message: 'Unable to prepare a timesheet.' })
-    if (!employeeCanEdit(timesheet.status)) return res.status(409).json({ message: 'This timesheet is read-only while it is under review or approved.' })
-    const [activityRows] = await pool.query<RowDataPacket[]>('SELECT id, category FROM activities WHERE id = ? AND active = TRUE LIMIT 1', [activityId]); const activity = activityRows[0]
-    if (!activity || (activity.category === 'project' && !projectId) || (activity.category === 'internal' && projectId)) return res.status(400).json({ message: 'Choose a valid project/activity combination.' })
-    if (projectId) { const [project] = await pool.query<RowDataPacket[]>('SELECT id FROM projects WHERE id = ? AND active = TRUE LIMIT 1', [projectId]); const [assigned] = await pool.query<RowDataPacket[]>('SELECT id FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? AND active = TRUE AND (starts_on IS NULL OR starts_on <= ?) AND (ends_on IS NULL OR ends_on >= ?) LIMIT 1', [employee.id, projectId, entryDate, entryDate]); if (!project[0] || !assigned[0]) return res.status(403).json({ message: 'This project is not currently assigned to you for that work date.' }); const [linkedActivity] = await pool.query<RowDataPacket[]>('SELECT id FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? AND active = TRUE LIMIT 1', [projectId, activityId]); if (!linkedActivity[0]) return res.status(400).json({ message: 'This activity is not valid for the selected project.' }) }
-    const [[daily]] = await pool.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ?', [timesheet.id, entryDate])
-    if (Number(daily?.total || 0) + hours > 24) return res.status(400).json({ message: 'Daily total cannot exceed 24 hours.' })
-    const [duplicates] = await pool.query<RowDataPacket[]>('SELECT id FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND activity_id = ? AND (project_id <=> ?) LIMIT 1', [timesheet.id, entryDate, activityId, projectId])
-    if (duplicates[0]) return res.status(409).json({ message: 'An entry already exists for this date, project, and activity.' })
-    const [result] = await pool.query<ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id, entry_date, project_id, activity_id, hours, work_description) VALUES (?, ?, ?, ?, ?, ?)', [timesheet.id, entryDate, projectId, activityId, hours, workDescription || null])
-    await syncTimesheetTotal(timesheet.id); await pool.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_added', `Added entry ${result.insertId}`])
-    return res.status(201).json({ message: 'Entry added.' })
-  } catch (error) { next(error) }
+    if (!isWeekday(entryDate) || !Number.isInteger(activityId)) return res.status(400).json({ message: 'Enter a valid weekday and activity.' })
+    if (!validEntryHours(hours)) return res.status(400).json({ message: 'Hours must be greater than 0, at most 24, and in quarter-hour increments.' })
+    await connection.beginTransaction()
+    const timesheet = await lockedOwnedTimesheet(connection, employee.id, period, true)
+    if (!timesheet) { await connection.rollback(); return res.status(500).json({ message: 'Unable to prepare a timesheet.' }) }
+    if (!employeeCanEdit(timesheet.status)) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet is read-only while it is under review or approved.' }) }
+    const [activityRows] = await connection.query<RowDataPacket[]>('SELECT id, category FROM activities WHERE id = ? AND active = TRUE LIMIT 1', [activityId]); const activity = activityRows[0]
+    if (!activity || (activity.category === 'project' && !projectId) || (activity.category === 'internal' && projectId)) { await connection.rollback(); return res.status(400).json({ message: 'Choose a valid project/activity combination.' }) }
+    if (projectId) { const [project] = await connection.query<RowDataPacket[]>('SELECT id FROM projects WHERE id = ? AND active = TRUE LIMIT 1', [projectId]); const [assigned] = await connection.query<RowDataPacket[]>('SELECT id FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? AND active = TRUE AND (starts_on IS NULL OR starts_on <= ?) AND (ends_on IS NULL OR ends_on >= ?) LIMIT 1', [employee.id, projectId, entryDate, entryDate]); if (!project[0] || !assigned[0]) { await connection.rollback(); return res.status(403).json({ message: 'This project is not currently assigned to you for that work date.' }) } const [linkedActivity] = await connection.query<RowDataPacket[]>('SELECT id FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? AND active = TRUE LIMIT 1', [projectId, activityId]); if (!linkedActivity[0]) { await connection.rollback(); return res.status(400).json({ message: 'This activity is not valid for the selected project.' }) } }
+    const [[daily]] = await connection.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ?', [timesheet.id, entryDate])
+    if (Number(daily?.total || 0) + hours > 24) { await connection.rollback(); return res.status(400).json({ message: 'Daily total cannot exceed 24 hours.' }) }
+    const [duplicates] = await connection.query<RowDataPacket[]>('SELECT id FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND activity_id = ? AND (project_id <=> ?) LIMIT 1', [timesheet.id, entryDate, activityId, projectId])
+    if (duplicates[0]) { await connection.rollback(); return res.status(409).json({ message: 'An entry already exists for this date, project, and activity.' }) }
+    const [result] = await connection.query<ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id, entry_date, project_id, activity_id, hours, work_description) VALUES (?, ?, ?, ?, ?, ?)', [timesheet.id, entryDate, projectId, activityId, hours, workDescription || null])
+    await syncTimesheetTotal(timesheet.id, connection); await connection.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_added', `Added entry ${result.insertId}`])
+    await connection.commit(); return res.status(201).json({ message: 'Entry added.' })
+  } catch (error) { await connection.rollback(); const conflict = employeeWriteConflict(error); if (conflict) return res.status(conflict.status).json({ message: conflict.message }); next(error) } finally { connection.release() }
 })
 
 app.delete('/api/employee/timesheet/entries/:id', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const employee = await employeeForActor(req.actor!); const period = await activeReportingPeriod()
+    const employee = await employeeForActor(req.actor!, connection); const period = await activeReportingPeriod(businessDate(), connection)
     if (!employee || !period) return res.status(404).json({ message: 'No active employee or reporting period found.' })
-    if (await employeePeriodIsLocked(period)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
-    const timesheet = await ownedTimesheet(employee.id, period)
-    if (!timesheet || !employeeCanEdit(timesheet.status)) return res.status(409).json({ message: 'This timesheet cannot be edited.' })
-    const [result] = await pool.query<ResultSetHeader>('DELETE FROM timesheet_entries WHERE id = ? AND timesheet_id = ?', [req.params.id, timesheet.id])
-    if (!result.affectedRows) return res.status(404).json({ message: 'Entry not found.' })
-    await syncTimesheetTotal(timesheet.id); await pool.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_deleted', `Deleted entry ${req.params.id}`])
-    return res.json({ message: 'Entry deleted.' })
-  } catch (error) { next(error) }
+    if (await employeePeriodIsLocked(period, connection)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
+    await connection.beginTransaction()
+    const timesheet = await lockedOwnedTimesheet(connection, employee.id, period)
+    if (!timesheet || !employeeCanEdit(timesheet.status)) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet cannot be edited.' }) }
+    const [result] = await connection.query<ResultSetHeader>('DELETE FROM timesheet_entries WHERE id = ? AND timesheet_id = ?', [req.params.id, timesheet.id])
+    if (!result.affectedRows) { await connection.rollback(); return res.status(404).json({ message: 'Entry not found.' }) }
+    await syncTimesheetTotal(timesheet.id, connection); await connection.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_deleted', `Deleted entry ${req.params.id}`])
+    await connection.commit(); return res.json({ message: 'Entry deleted.' })
+  } catch (error) { await connection.rollback(); const conflict = employeeWriteConflict(error); if (conflict) return res.status(conflict.status).json({ message: conflict.message }); next(error) } finally { connection.release() }
 })
 
 app.put('/api/employee/timesheet/entries/:id', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const employee = await employeeForActor(req.actor!); const period = await activeReportingPeriod()
+    const employee = await employeeForActor(req.actor!, connection); const period = await activeReportingPeriod(businessDate(), connection)
     if (!employee || !period) return res.status(404).json({ message: 'No active employee or reporting period found.' })
-    if (await employeePeriodIsLocked(period)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
-    const timesheet = await ownedTimesheet(employee.id, period)
-    if (!timesheet || !employeeCanEdit(timesheet.status)) return res.status(409).json({ message: 'This timesheet cannot be edited.' })
+    if (await employeePeriodIsLocked(period, connection)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
+    await connection.beginTransaction()
+    const timesheet = await lockedOwnedTimesheet(connection, employee.id, period)
+    if (!timesheet || !employeeCanEdit(timesheet.status)) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet cannot be edited.' }) }
     const entryDate = String(req.body?.entryDate || ''); const projectId = req.body?.projectId ? Number(req.body.projectId) : null; const activityId = Number(req.body?.activityId); const hours = Number(req.body?.hours); const workDescription = String(req.body?.workDescription || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < period.startsOn || entryDate > period.endsOn || !isWeekday(entryDate) || !Number.isFinite(hours) || hours <= 0 || hours > 24 || !Number.isInteger(activityId)) return res.status(400).json({ message: 'Enter a valid weekday, activity, and hours within this reporting period.' })
-    const [current] = await pool.query<RowDataPacket[]>("SELECT id, project_id AS projectId, activity_id AS activityId, DATE_FORMAT(entry_date, '%Y-%m-%d') AS entryDate FROM timesheet_entries WHERE id = ? AND timesheet_id = ? LIMIT 1", [req.params.id, timesheet.id])
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < period.startsOn || entryDate > period.endsOn || !isWeekday(entryDate) || !Number.isInteger(activityId)) { await connection.rollback(); return res.status(400).json({ message: 'Enter a valid weekday and activity within this reporting period.' }) }
+    if (!validEntryHours(hours)) { await connection.rollback(); return res.status(400).json({ message: 'Hours must be greater than 0, at most 24, and in quarter-hour increments.' }) }
+    const [current] = await connection.query<RowDataPacket[]>("SELECT id, project_id AS projectId, activity_id AS activityId, DATE_FORMAT(entry_date, '%Y-%m-%d') AS entryDate FROM timesheet_entries WHERE id = ? AND timesheet_id = ? LIMIT 1", [req.params.id, timesheet.id])
     const currentEntry = current[0]
-    if (!currentEntry) return res.status(404).json({ message: 'Entry not found.' })
+    if (!currentEntry) { await connection.rollback(); return res.status(404).json({ message: 'Entry not found.' }) }
     const sameHistoricalPair = Number(currentEntry.projectId || 0) === Number(projectId || 0) && Number(currentEntry.activityId) === activityId && String(currentEntry.entryDate) === entryDate
-    const [activityRows] = await pool.query<RowDataPacket[]>('SELECT id, category, active FROM activities WHERE id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [activityId, sameHistoricalPair]); const activity = activityRows[0]
-    if (!activity || (activity.category === 'project' && !projectId) || (activity.category === 'internal' && projectId)) return res.status(400).json({ message: 'Choose a valid project/activity combination.' })
-    if (projectId) { const [project] = await pool.query<RowDataPacket[]>('SELECT id,active FROM projects WHERE id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [projectId, sameHistoricalPair]); const [assigned] = await pool.query<RowDataPacket[]>('SELECT id FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? AND (active = TRUE OR ? = TRUE) AND (starts_on IS NULL OR starts_on <= ?) AND (ends_on IS NULL OR ends_on >= ?) LIMIT 1', [employee.id, projectId, sameHistoricalPair, entryDate, entryDate]); if (!project[0] || !assigned[0]) return res.status(403).json({ message: 'This project was not assigned to you for that work date.' }); const [linkedActivity] = await pool.query<RowDataPacket[]>('SELECT id FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [projectId, activityId, sameHistoricalPair]); if (!linkedActivity[0]) return res.status(400).json({ message: 'This activity is not valid for the selected project.' }) }
-    const [[daily]] = await pool.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND id <> ?', [timesheet.id, entryDate, req.params.id])
-    if (Number(daily?.total || 0) + hours > 24) return res.status(400).json({ message: 'Daily total cannot exceed 24 hours.' })
-    const [duplicates] = await pool.query<RowDataPacket[]>('SELECT id FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND activity_id = ? AND (project_id <=> ?) AND id <> ? LIMIT 1', [timesheet.id, entryDate, activityId, projectId, req.params.id])
-    if (duplicates[0]) return res.status(409).json({ message: 'An entry already exists for this date, project, and activity.' })
-    await pool.query('UPDATE timesheet_entries SET entry_date = ?, project_id = ?, activity_id = ?, hours = ?, work_description = ? WHERE id = ? AND timesheet_id = ?', [entryDate, projectId, activityId, hours, workDescription || null, req.params.id, timesheet.id])
-    await syncTimesheetTotal(timesheet.id); await pool.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_updated', `Updated entry ${req.params.id}`])
-    return res.json({ message: 'Entry updated.' })
-  } catch (error) { next(error) }
+    const [activityRows] = await connection.query<RowDataPacket[]>('SELECT id, category, active FROM activities WHERE id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [activityId, sameHistoricalPair]); const activity = activityRows[0]
+    if (!activity || (activity.category === 'project' && !projectId) || (activity.category === 'internal' && projectId)) { await connection.rollback(); return res.status(400).json({ message: 'Choose a valid project/activity combination.' }) }
+    if (projectId) { const [project] = await connection.query<RowDataPacket[]>('SELECT id,active FROM projects WHERE id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [projectId, sameHistoricalPair]); const [assigned] = await connection.query<RowDataPacket[]>('SELECT id FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? AND (active = TRUE OR ? = TRUE) AND (starts_on IS NULL OR starts_on <= ?) AND (ends_on IS NULL OR ends_on >= ?) LIMIT 1', [employee.id, projectId, sameHistoricalPair, entryDate, entryDate]); if (!project[0] || !assigned[0]) { await connection.rollback(); return res.status(403).json({ message: 'This project was not assigned to you for that work date.' }) } const [linkedActivity] = await connection.query<RowDataPacket[]>('SELECT id FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? AND (active = TRUE OR ? = TRUE) LIMIT 1', [projectId, activityId, sameHistoricalPair]); if (!linkedActivity[0]) { await connection.rollback(); return res.status(400).json({ message: 'This activity is not valid for the selected project.' }) } }
+    const [[daily]] = await connection.query<RowDataPacket[]>('SELECT COALESCE(SUM(hours), 0) AS total FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND id <> ?', [timesheet.id, entryDate, req.params.id])
+    if (Number(daily?.total || 0) + hours > 24) { await connection.rollback(); return res.status(400).json({ message: 'Daily total cannot exceed 24 hours.' }) }
+    const [duplicates] = await connection.query<RowDataPacket[]>('SELECT id FROM timesheet_entries WHERE timesheet_id = ? AND entry_date = ? AND activity_id = ? AND (project_id <=> ?) AND id <> ? LIMIT 1', [timesheet.id, entryDate, activityId, projectId, req.params.id])
+    if (duplicates[0]) { await connection.rollback(); return res.status(409).json({ message: 'An entry already exists for this date, project, and activity.' }) }
+    await connection.query('UPDATE timesheet_entries SET entry_date = ?, project_id = ?, activity_id = ?, hours = ?, work_description = ? WHERE id = ? AND timesheet_id = ?', [entryDate, projectId, activityId, hours, workDescription || null, req.params.id, timesheet.id])
+    await syncTimesheetTotal(timesheet.id, connection); await connection.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, 'entry_updated', `Updated entry ${req.params.id}`])
+    await connection.commit(); return res.json({ message: 'Entry updated.' })
+  } catch (error) { await connection.rollback(); const conflict = employeeWriteConflict(error); if (conflict) return res.status(conflict.status).json({ message: conflict.message }); next(error) } finally { connection.release() }
 })
 
 app.post('/api/employee/timesheet/submit-daily', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
   const connection = await pool.getConnection()
   try {
-    const employee = await employeeForActor(req.actor!); const period = await activeReportingPeriod()
+    const employee = await employeeForActor(req.actor!, connection); const period = await activeReportingPeriod(businessDate(), connection)
     if (!employee || !period) return res.status(404).json({ message: 'No active employee or reporting period found.' })
-    if (await employeePeriodIsLocked(period)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
-    const timesheet = await ownedTimesheet(employee.id, period)
-    if (!timesheet || !employeeCanSubmit(timesheet.status)) return res.status(409).json({ message: 'This timesheet cannot be submitted.' })
+    if (await employeePeriodIsLocked(period, connection)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
+    await connection.beginTransaction()
+    const timesheet = await lockedOwnedTimesheet(connection, employee.id, period)
+    if (!timesheet || !employeeCanSubmit(timesheet.status)) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet cannot be submitted.' }) }
     const [managerRows] = await connection.query<RowDataPacket[]>("SELECT id, email FROM users WHERE id = ? AND role = 'manager' LIMIT 1", [employee.managerUserId])
-    if (!managerRows[0]) return res.status(409).json({ message: 'Your timesheet cannot be submitted until HR assigns an active Manager.' })
+    if (!managerRows[0]) { await connection.rollback(); return res.status(409).json({ message: 'Your timesheet cannot be submitted until HR assigns an active Manager.' }) }
     const [entries] = await connection.query<RowDataPacket[]>("SELECT DATE_FORMAT(entry_date, '%Y-%m-%d') AS entryDate, hours, work_description AS workDescription FROM timesheet_entries WHERE timesheet_id = ?", [timesheet.id])
-    if (!entries.length) return res.status(400).json({ message: 'Add at least one daily entry before submitting.' })
+    if (!entries.length) { await connection.rollback(); return res.status(400).json({ message: 'Add at least one daily entry before submitting.' }) }
     const [holidays] = await connection.query<RowDataPacket[]>("SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d') AS holidayDate FROM public_holidays WHERE active = TRUE AND holiday_date BETWEEN ? AND ? AND (region = 'default' OR region = ?)", [period.startsOn, period.endsOn, employee.region])
     const [leave] = await connection.query<RowDataPacket[]>("SELECT DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn FROM employee_leave_records WHERE employee_id = ? AND status = 'approved'", [employee.id])
     const dates = new Set(entries.map((entry) => String(entry.entryDate).slice(0, 10)))
     const missing: string[] = []; for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${String(period.endsOn).slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) { const value = date.toISOString().slice(0, 10); const holiday = holidays.some((item) => String(item.holidayDate).slice(0, 10) === value); const onLeave = leave.some((item) => value >= String(item.startsOn).slice(0, 10) && value <= String(item.endsOn).slice(0, 10)); if (isWeekday(value) && !holiday && !onLeave && !dates.has(value)) missing.push(value) }
-    await connection.beginTransaction()
-    const nextStatus = timesheet.status === 'returned' || timesheet.status === 'rejected' ? 'resubmitted' : 'submitted'
+   const nextStatus = timesheet.status === 'returned' || timesheet.status === 'rejected' ? 'resubmitted' : 'submitted'
     const [submitted] = await connection.query<ResultSetHeader>('UPDATE timesheets SET status = ?, assigned_manager_user_id = COALESCE(assigned_manager_user_id, ?), submitted_at = NOW(), return_reason = NULL, version = version + 1 WHERE id = ? AND status = ? AND version = ?', [nextStatus, employee.managerUserId, timesheet.id, timesheet.status, timesheet.version])
     if (!submitted.affectedRows) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet changed before submission. Refresh and try again.' }) }
     await connection.query('INSERT INTO timesheet_audit_events (timesheet_id, actor_user_id, event_type, detail) VALUES (?, ?, ?, ?)', [timesheet.id, req.actor!.id, nextStatus === 'resubmitted' ? 'resubmitted' : 'submitted', missing.length ? `Submitted with ${missing.length} missing workday warning(s).` : null])
@@ -1129,7 +1176,7 @@ app.post('/api/employee/timesheet/submit-daily', requireEmployee, async (req: Au
     await connection.query('INSERT INTO notifications (title, message, notification_type, recipient_email, timesheet_id) VALUES (?, ?, ?, ?, ?)', [managerTitle, `${employee.name} ${nextStatus === 'resubmitted' ? 'resubmitted' : 'submitted'} a ${period.label} timesheet for your review.`, 'info', managerEmail, timesheet.id])
     await writeWorkflowAudit(connection, req.actor!, managerTitle, 'timesheet', Number(timesheet.id), `${employee.name} · ${period.label}`, { status: timesheet.status }, { status: nextStatus, assignedManagerUserId: employee.managerUserId })
     await connection.commit(); return res.json({ message: 'Timesheet submitted for review.', warnings: missing })
-  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+  } catch (error) { await connection.rollback(); const conflict = employeeWriteConflict(error); if (conflict) return res.status(conflict.status).json({ message: conflict.message }); next(error) } finally { connection.release() }
 })
 
 app.post('/api/employee/notifications/:id/read', requireEmployee, async (req: AuthenticatedRequest, res, next) => {
@@ -1141,7 +1188,7 @@ app.post('/api/employee/notifications/:id/read', requireEmployee, async (req: Au
 })
 
 async function managerOwnsTimesheet(managerId: number, timesheetId: string) {
-  const [rows] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.status, t.version, t.employee_id AS employeeId, e.name AS employeeName, e.email AS employeeEmail, t.period_label AS periodLabel
+  const [rows] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.status, t.version, t.total_hours AS totalHours, t.employee_id AS employeeId, e.name AS employeeName, e.email AS employeeEmail, t.period_label AS periodLabel
     FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? LIMIT 1`, [timesheetId, managerId])
   return rows[0]
 }
@@ -1433,7 +1480,7 @@ async function decideManagerTimesheet(req: AuthenticatedRequest, res: Response, 
       const [[integrity]] = await connection.query<RowDataPacket[]>(`SELECT COUNT(e.id) AS entryCount, COALESCE(SUM(e.hours),0) AS entryHours,
         (SELECT COUNT(*) FROM validation_findings f WHERE f.timesheet_id = ? AND f.resolved = FALSE AND f.severity = 'critical') AS criticalCount
         FROM timesheet_entries e WHERE e.timesheet_id = ? FOR UPDATE`, [timesheet.id, timesheet.id])
-      if (!Number(integrity?.entryCount || 0) || Number(integrity?.entryHours || 0) !== Number(timesheet.totalHours || 0) || Number(integrity?.criticalCount || 0) > 0) {
+      if (!managerApprovalIntegrityValid(timesheet.totalHours, integrity?.entryCount, integrity?.entryHours, integrity?.criticalCount)) {
         await connection.rollback()
         return res.status(409).json({ message: 'This timesheet cannot be approved until it has valid entries, a matching total, and no unresolved critical findings.' })
       }
@@ -1527,7 +1574,7 @@ app.post('/api/employee/timesheet/submit', requireEmployee, (_req: Authenticated
 
 app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
     const [[employeeCount]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS value FROM employees WHERE active = TRUE')
     const [[submittedCount]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) AS value FROM timesheets WHERE reporting_period_id = ? AND status IN ('submitted', 'resubmitted')", [period.id])
@@ -1543,7 +1590,7 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
     let pendingValue = 0; let missingWorkdayValue = 0
     const timesheetDistribution = { draft: 0, submitted: 0, returned: 0, approved: 0 }
     const missingWorkdayExceptions: any[] = []
-    const missingByEmployee = await missingWorkdaysForMembers(workforcePosition, period)
+    const missingByEmployee = await missingWorkdaysForMembers(workforcePosition, period, businessDate())
     for (const member of workforcePosition) {
       const status = String(member.status || 'draft')
       if (status === 'approved') timesheetDistribution.approved++
@@ -1581,7 +1628,7 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
 
 app.get('/api/director/exceptions', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
     const [rows] = await pool.query<RowDataPacket[]>(`SELECT v.id, v.severity, v.finding_type AS type, v.message, v.resolved, e.name AS employeeName, e.employee_code AS employeeCode, d.name AS department, t.total_hours AS hours, t.status
       FROM validation_findings v JOIN timesheets t ON t.id = v.timesheet_id JOIN employees e ON e.id = t.employee_id JOIN departments d ON d.id = e.department_id
@@ -1593,7 +1640,7 @@ app.get('/api/director/exceptions', requireDirector, async (_req: AuthenticatedR
 
 app.get('/api/director/reports', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
     const [departments] = await pool.query<RowDataPacket[]>(`SELECT d.id, d.name, COUNT(e.id) AS employees, ROUND(AVG(t.total_hours), 1) AS averageHours,
       SUM(t.status = 'approved') AS approved, SUM(t.status IN ('submitted', 'resubmitted')) AS submitted, SUM(t.status IN ('draft', 'submitted', 'resubmitted')) AS pending
@@ -1605,7 +1652,7 @@ app.get('/api/director/reports', requireDirector, async (_req: AuthenticatedRequ
 
 app.get('/api/director/financial-report', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     const periodLabel = period?.label || ''
     const [invoices] = await pool.query<RowDataPacket[]>(`SELECT currency, COUNT(*) AS invoiceCount, SUM(subtotal) AS finalizedAmount
       FROM invoices WHERE status = 'finalized' AND (? = '' OR period_label = ?) GROUP BY currency ORDER BY currency`, [periodLabel, periodLabel])
@@ -1622,7 +1669,7 @@ app.get('/api/director/financial-report', requireDirector, async (_req: Authenti
 
 app.get('/api/director/departments/:id', requireDirector, async (req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
     const [departmentRows] = await pool.query<RowDataPacket[]>('SELECT id, code, name FROM departments WHERE id = ? LIMIT 1', [req.params.id])
     if (!departmentRows[0]) return res.status(404).json({ message: 'Department not found.' })
@@ -1634,7 +1681,7 @@ app.get('/api/director/departments/:id', requireDirector, async (req: Authentica
 
 app.get('/api/director/approvals', requireDirector, async (_req: AuthenticatedRequest, res, next) => {
   try {
-    const period = await activeReportingPeriod()
+    const period = await directorReportingPeriod()
     if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
     const [submissions] = await pool.query<RowDataPacket[]>(`SELECT s.id, s.status, s.submitted_by AS submittedBy, s.submitted_at AS submittedAt, s.decided_by AS decidedBy, s.decided_at AS decidedAt, s.return_reason AS returnReason,
       d.name AS department, d.code AS departmentCode, COUNT(DISTINCT e.id) AS employeeCount, COALESCE(SUM(t.total_hours), 0) AS totalHours,

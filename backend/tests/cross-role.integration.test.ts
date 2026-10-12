@@ -26,7 +26,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
   const workdays = (start: string, count: number) => { const days: string[] = []; const date = new Date(`${start}T00:00:00Z`); while (days.length < count) { if (date.getUTCDay() !== 0 && date.getUTCDay() !== 6) days.push(date.toISOString().slice(0, 10)); date.setUTCDate(date.getUTCDate() + 1) }; return days }
   try {
     const period = await createTestPeriod(db, suffix); testPeriodId = period.id
-    const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1'); assert.ok(department); departmentId = Number(department.id)
+    const [department] = await db.query<mysql.ResultSetHeader>('INSERT INTO departments (code, name) VALUES (?, ?)', [`XR-${suffix}`, `Cross-role department ${suffix}`]); departmentId = department.insertId
     const [listener] = await new Promise<[ReturnType<typeof createServer>, number]>((resolvePort, reject) => { const server = createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => resolvePort([server, (server.address() as any).port])) })
     port = (listener.address() as any).port; await new Promise<void>(resolveClose => listener.close(() => resolveClose()))
     const hash = await bcrypt.hash(password, 6)
@@ -106,6 +106,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     if (userIds.length) await db.query(`DELETE FROM notifications WHERE recipient_email IN (${userIds.map(()=>'?').join(',')})`,userIds.map(id=>emails[Object.entries({hr:hrId,manager:managerId,newManager:newManagerId,employee:employeeUserId,finance:financeId,director:directorId}).find(([,value])=>value===id)?.[0] as keyof typeof emails] || '')).catch(()=>undefined)
     if (employeeId) await db.query('DELETE FROM employee_project_assignments WHERE employee_id=?',[employeeId]).catch(()=>undefined)
     if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (${userIds.map(()=>'?').join(',')})`,userIds).catch(()=>undefined)
+    if (departmentId) await db.query('DELETE FROM departments WHERE id=?', [departmentId]).catch(()=>undefined)
     if (testPeriodId) await db.query('DELETE FROM reporting_periods WHERE id=?', [testPeriodId])
     await db.end()
   }

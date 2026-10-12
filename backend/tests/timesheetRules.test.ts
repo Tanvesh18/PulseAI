@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { employeeCanEdit, employeeCanSubmit, employeeCanUseProject, isAllowedTransition, managerCanAccess, managerCanDecide, validReturnReason, versionMatches } from '../timesheetRules.js'
+import { employeeCanEdit, employeeCanSubmit, employeeCanUseProject, isAllowedTransition, managerCanAccess, managerCanDecide, managerApprovalIntegrityValid, validEntryHours, validReturnReason, versionMatches } from '../timesheetRules.js'
 
 test('Manager access is limited to the assigned team', () => {
   assert.equal(managerCanAccess(7, 7), true)
@@ -53,4 +53,17 @@ test('a stale decision version is rejected to prevent concurrent review overwrit
   assert.equal(versionMatches(4, 4), true)
   assert.equal(versionMatches(3, 4), false)
   assert.equal(versionMatches('not-a-version', 4), false)
+})
+
+test('Manager approval requires entries, matching hours, and no unresolved critical findings', () => {
+  assert.equal(managerApprovalIntegrityValid(8, 1, 8, 0), true)
+  assert.equal(managerApprovalIntegrityValid(8, 0, 0, 0), false)
+  assert.equal(managerApprovalIntegrityValid(8, 1, 7.5, 0), false)
+  assert.equal(managerApprovalIntegrityValid(8, 1, 8, 1), false)
+  assert.equal(managerApprovalIntegrityValid(undefined, 1, 8, 0), false)
+})
+
+test('Employee entry hours use quarter-hour steps within one day', () => {
+  for (const hours of [0.25, 0.5, 6.5, 24]) assert.equal(validEntryHours(hours), true)
+  for (const hours of [0, -1, 0.001, 0.1, 24.25, Infinity, NaN]) assert.equal(validEntryHours(hours), false)
 })
