@@ -17,6 +17,8 @@ export function managerApprovalIntegrityValid(totalHours: unknown, entryCount: u
   return Number(entryCount) > 0 && Number.isFinite(storedTotal) && Number.isFinite(summedHours) && summedHours === storedTotal && Number(criticalCount) === 0
 }
 
+export function missingWorkdayCutoff(periodEnd: string, today: string, throughDate = periodEnd) { return [periodEnd, today, throughDate].sort()[0] }
+
 export function validEntryHours(value: unknown) {
   const hours = Number(value)
   return Number.isFinite(hours) && hours > 0 && hours <= 24 && Number.isInteger(hours * 4)

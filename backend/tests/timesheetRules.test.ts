@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { employeeCanEdit, employeeCanSubmit, employeeCanUseProject, isAllowedTransition, managerCanAccess, managerCanDecide, managerApprovalIntegrityValid, validEntryHours, validReturnReason, versionMatches } from '../timesheetRules.js'
+import { employeeCanEdit, employeeCanSubmit, employeeCanUseProject, isAllowedTransition, managerCanAccess, managerCanDecide, managerApprovalIntegrityValid, missingWorkdayCutoff, validEntryHours, validReturnReason, versionMatches } from '../timesheetRules.js'
 
 test('Manager access is limited to the assigned team', () => {
   assert.equal(managerCanAccess(7, 7), true)
@@ -66,4 +66,10 @@ test('Manager approval requires entries, matching hours, and no unresolved criti
 test('Employee entry hours use quarter-hour steps within one day', () => {
   for (const hours of [0.25, 0.5, 6.5, 24]) assert.equal(validEntryHours(hours), true)
   for (const hours of [0, -1, 0.001, 0.1, 24.25, Infinity, NaN]) assert.equal(validEntryHours(hours), false)
+})
+
+test('missing workdays stop at today, period end, or an earlier requested date', () => {
+  assert.equal(missingWorkdayCutoff('2026-10-31', '2026-10-12'), '2026-10-12')
+  assert.equal(missingWorkdayCutoff('2026-09-30', '2026-10-12'), '2026-09-30')
+  assert.equal(missingWorkdayCutoff('2026-10-31', '2026-10-12', '2026-10-09'), '2026-10-09')
 })

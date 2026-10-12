@@ -23,7 +23,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
   const testPeriodIds: number[] = []
   const password = `Integration-${suffix}-Pass!`
   const token = async (email: string, role: string) => { const response = await fetch(`http://127.0.0.1:${port}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, role }) }); const data = await response.json() as any; assert.equal(response.status, 200, `${email}: ${JSON.stringify(data)}`); return data.token as string }
-  const request = async (path: string, authToken: string, method = 'GET', body?: object) => { const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }); const raw = await response.text(); let data: any = {}; try { data = raw ? JSON.parse(raw) : {} } catch { data = { raw } }; return { status: response.status, data } }
+  const request = async (path: string, authToken: string, method = 'GET', body?: object, signal?: AbortSignal) => { const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, signal, headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }); const raw = await response.text(); let data: any = {}; try { data = raw ? JSON.parse(raw) : {} } catch { data = { raw } }; return { status: response.status, data } }
   const workday = (dateText: string) => { const date = new Date(`${dateText}T00:00:00Z`); while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date.setUTCDate(date.getUTCDate() + 1); return date.toISOString().slice(0, 10) }
   try {
     const period = await createTestPeriod(db, suffix); testPeriodIds.push(period.id)
@@ -100,15 +100,26 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     const lockedEdit = await request(`/employee/timesheet/entries/${entryId}`, employeeToken, 'PUT', { entryDate, projectId, activityId, hours: 6, workDescription: 'Should stay locked' }); assert.equal(lockedEdit.status, 409)
     const [approvedRows] = await db.query<any[]>('SELECT status, reviewer_user_id, approved_at FROM timesheets WHERE id = ?', [sheetId]); assert.equal(approvedRows[0].status, 'approved'); assert.equal(Number(approvedRows[0].reviewer_user_id), managerId); assert.ok(approvedRows[0].approved_at)
     const [auditRows] = await db.query<any[]>('SELECT event_type, detail FROM timesheet_audit_events WHERE timesheet_id = ? ORDER BY id', [sheetId]); assert.deepEqual(auditRows.map(row => row.event_type), ['returned', 'entry_updated', 'resubmitted', 'approved']); assert.match(auditRows[0].detail, /Confirm the selected client project/)
-    assert.equal((await request(`/manager/timesheets/${sheetId}/return`, managerToken, 'POST', { version: Number(reviewAgain.data.timesheet.version), reason: 'Second decision' })).status, 404)
+    assert.equal((await request(`/manager/timesheets/${sheetId}/return`, managerToken, 'POST', { version: Number(reviewAgain.data.timesheet.version), reason: 'Second decision' })).status, 409)
     const exceptions = await request('/manager/exceptions', managerToken); assert.equal(exceptions.status, 200); assert.equal(Number(exceptions.data.dailyHoursWarningThreshold), 8)
 
     const [notifications] = await db.query<any[]>('SELECT title FROM notifications WHERE recipient_email = ? AND timesheet_id = ?', [outsiderEmail, sheetId]); assert.equal(notifications.length, 0)
     const [employeeNotices] = await db.query<any[]>('SELECT title FROM notifications WHERE recipient_email = ? AND timesheet_id = ?', [employeeEmail, sheetId]); assert.ok(employeeNotices.some(row => row.title === 'Timesheet returned')); assert.ok(employeeNotices.some(row => row.title === 'Timesheet approved'))
 
     const concurrentReview = await request(`/manager/timesheets/${concurrentSheetId}`, managerToken); const concurrentVersion = Number(concurrentReview.data.timesheet.version)
-    const decisions = await Promise.all([request(`/manager/timesheets/${concurrentSheetId}/approve`, managerToken, 'POST', { version: concurrentVersion }), request(`/manager/timesheets/${concurrentSheetId}/return`, managerToken, 'POST', { version: concurrentVersion, reason: 'Review in parallel.' })])
-    assert.deepEqual(decisions.map(item => item.status).sort(), [200, 409])
+    const decisions = await Promise.all(Array.from({ length: 20 }, (_, index) => request(`/manager/timesheets/${concurrentSheetId}/${index % 2 ? 'return' : 'approve'}`, managerToken, 'POST', { version: concurrentVersion, ...(index % 2 ? { reason: 'Review in parallel.' } : {}) }, AbortSignal.timeout(8000))))
+    assert.equal(decisions.filter(item => item.status === 200).length, 1)
+    assert.equal(decisions.filter(item => item.status === 409).length, 19)
+    const [decisionAudit] = await db.query<any[]>('SELECT event_type, actor_user_id FROM timesheet_audit_events WHERE timesheet_id = ?', [concurrentSheetId])
+    assert.equal(decisionAudit.length, 1)
+    assert.equal(Number(decisionAudit[0].actor_user_id), managerId)
+    const [globalDecisionAudit] = await db.query<any[]>("SELECT id FROM audit_events WHERE entity_type = 'timesheet' AND entity_id = ? AND action IN ('Timesheet approved', 'Timesheet returned')", [concurrentSheetId])
+    assert.equal(globalDecisionAudit.length, 1)
+    const missingId = 999999999
+    const missingStarted = Date.now()
+    const missingDecisions = await Promise.all(Array.from({ length: 20 }, () => request(`/manager/timesheets/${missingId}/approve`, managerToken, 'POST', { version: 1 }, AbortSignal.timeout(8000))))
+    assert.ok(Date.now() - missingStarted < 8000, 'Nonexistent decisions must finish promptly.')
+    assert.ok(missingDecisions.every(item => item.status === 404))
   } finally {
     if (server && server.exitCode === null) { server.kill(); await new Promise<void>(resolveExit => { const timer = setTimeout(resolveExit, 3000); server?.once('exit', () => { clearTimeout(timer); resolveExit() }) }) }
     if (departmentId) {

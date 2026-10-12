@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
-import { employeeCanEdit, employeeCanSubmit, managerCanDecide, managerApprovalIntegrityValid, validEntryHours, validReturnReason, versionMatches } from './timesheetRules.js'
+import { employeeCanEdit, employeeCanSubmit, managerCanDecide, managerApprovalIntegrityValid, missingWorkdayCutoff, validEntryHours, validReturnReason, versionMatches } from './timesheetRules.js'
 import { registerFinanceRoutes } from './financeRoutes.js'
 import { openApiSpec } from './openapi.js'
 import { seedDemoShowcase, revertDemoShowcase } from './scripts/demoShowcase.js'
@@ -992,12 +992,13 @@ async function missingWorkdaysForMembers(members: RowDataPacket[], period: RowDa
     if (!entriesByTimesheet.has(key)) entriesByTimesheet.set(key, new Set())
     entriesByTimesheet.get(key)!.add(String(row.day).slice(0, 10))
   }
+  const lastWorkday = missingWorkdayCutoff(String(period.endsOn).slice(0, 10), businessDate(), String(throughDate).slice(0, 10))
   for (const member of members) {
     const missing: string[] = []
     const memberLeave = leaveByEmployee.get(Number(member.id)) || []
     const entryDates = entriesByTimesheet.get(Number(member.timesheetId || 0)) || new Set<string>()
     const holidayDates = new Set(holidays.filter((row) => row.region === 'default' || row.region === member.region).map((row) => String(row.day).slice(0, 10)))
-    for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${String(throughDate < period.endsOn ? throughDate : period.endsOn).slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) {
+    for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${lastWorkday}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) {
       const day = date.toISOString().slice(0, 10)
       const onLeave = memberLeave.some((row) => day >= String(row.startsOn).slice(0, 10) && day <= String(row.endsOn).slice(0, 10))
       if (isWeekday(day) && !holidayDates.has(day) && !onLeave && !entryDates.has(day)) missing.push(day)
@@ -1468,14 +1469,17 @@ app.post('/api/manager/notifications/:id/read', requireManager, async (req: Auth
 async function decideManagerTimesheet(req: AuthenticatedRequest, res: Response, decision: 'approved' | 'returned') {
   const connection = await pool.getConnection()
   try {
-    const timesheet = await managerOwnsTimesheet(req.actor!.id, String(req.params.id))
-    if (!timesheet || !managerCanDecide(timesheet.status)) return res.status(404).json({ message: 'A submitted team timesheet was not found.' })
-    const expectedVersion = Number(req.body?.version)
-    if (!versionMatches(expectedVersion, Number(timesheet.version))) return res.status(409).json({ message: 'This timesheet changed before your decision. Refresh it and review the latest version.' })
-    const reason = String(req.body?.reason || '').trim(); const entryId = req.body?.entryId ? Number(req.body.entryId) : null; const entryComment = String(req.body?.entryComment || '').trim()
-    if (decision === 'returned' && !validReturnReason(reason)) return res.status(400).json({ message: 'Provide a return reason of up to 500 characters.' })
-    if (entryId && (decision !== 'returned' || !entryComment || entryComment.length > 500)) return res.status(400).json({ message: 'An entry comment is only allowed when returning a timesheet and must be 1 to 500 characters.' })
     await connection.beginTransaction()
+    const [ownedRows] = await connection.query<RowDataPacket[]>(`SELECT t.id, t.status, t.version, t.total_hours AS totalHours, t.employee_id AS employeeId, e.name AS employeeName, e.email AS employeeEmail, t.period_label AS periodLabel
+      FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? LIMIT 1 FOR UPDATE`, [req.params.id, req.actor!.id])
+    const timesheet = ownedRows[0]
+    if (!timesheet) { await connection.rollback(); return res.status(404).json({ message: 'A submitted team timesheet was not found.' }) }
+    const expectedVersion = Number(req.body?.version)
+    if (!versionMatches(expectedVersion, Number(timesheet.version))) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet changed before your decision. Refresh it and review the latest version.' }) }
+    if (!managerCanDecide(timesheet.status)) { await connection.rollback(); return res.status(404).json({ message: 'A submitted team timesheet was not found.' }) }
+    const reason = String(req.body?.reason || '').trim(); const entryId = req.body?.entryId ? Number(req.body.entryId) : null; const entryComment = String(req.body?.entryComment || '').trim()
+    if (decision === 'returned' && !validReturnReason(reason)) { await connection.rollback(); return res.status(400).json({ message: 'Provide a return reason of up to 500 characters.' }) }
+    if (entryId && (decision !== 'returned' || !entryComment || entryComment.length > 500)) { await connection.rollback(); return res.status(400).json({ message: 'An entry comment is only allowed when returning a timesheet and must be 1 to 500 characters.' }) }
     if (decision === 'approved') {
       const [[integrity]] = await connection.query<RowDataPacket[]>(`SELECT COUNT(e.id) AS entryCount, COALESCE(SUM(e.hours),0) AS entryHours,
         (SELECT COUNT(*) FROM validation_findings f WHERE f.timesheet_id = ? AND f.resolved = FALSE AND f.severity = 'critical') AS criticalCount
