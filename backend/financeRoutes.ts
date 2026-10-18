@@ -1,7 +1,7 @@
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { randomUUID } from 'node:crypto'
-import { activeReportingPeriod } from './reportingPeriod.js'
+import { activeReportingPeriod, businessDate, previousCalendarDate } from './reportingPeriod.js'
 import { calculateLineAmount, csvCell, financeEntryCanBeInvoiced, financeCanProcessTimesheet, invoiceTransitionAllowed, validCurrency, type InvoiceStatus } from './financeRules.js'
 
 type FinanceRequest = Request & { actor?: { id: number; role: string; email: string } }
@@ -17,7 +17,7 @@ async function writeFinanceAudit(connection: Pool | PoolConnection, actorId: num
 async function applicableRate(connection: Pool | PoolConnection, projectId: number, entryDate: string) {
   const [rates] = await connection.query<RowDataPacket[]>(`SELECT id, amount, currency, active, effective_from AS effectiveFrom, effective_to AS effectiveTo
     FROM project_billing_rates WHERE project_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)
-    AND (active = TRUE OR ? < CURDATE()) ORDER BY effective_from DESC LIMIT 2 FOR UPDATE`, [projectId, entryDate, entryDate, entryDate])
+    AND (active = TRUE OR ? < ?) ORDER BY effective_from DESC LIMIT 2 FOR UPDATE`, [projectId, entryDate, entryDate, entryDate, businessDate()])
   return rates.length === 1 ? rates[0] : null
 }
 
@@ -39,12 +39,12 @@ async function financeEntries(pool: Pool, filters: Filters = {}) {
     JOIN employees emp ON emp.id = t.employee_id JOIN activities a ON a.id = e.activity_id
     LEFT JOIN projects p ON p.id = e.project_id LEFT JOIN clients c ON c.id = p.client_id
     LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = a.id
-    LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < CURDATE())
+    LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
     LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id
     WHERE (? = '' OR t.period_label = ?) AND (? IS NULL OR p.id = ?) AND (? IS NULL OR emp.id = ?) AND (? IS NULL OR p.client_id = ?)
       AND (? = 'all' OR COALESCE(i.status, CASE WHEN a.category = 'internal' OR pa.billable = FALSE THEN 'not_billable' ELSE 'unbilled' END) = ?)
       AND (? = 'all' OR (? = 'billable' AND a.category = 'project' AND pa.billable = TRUE) OR (? = 'nonbillable' AND (a.category = 'internal' OR pa.billable = FALSE)) OR (? = 'unclassified' AND a.category = 'project' AND pa.billable IS NULL))
-    ORDER BY e.entry_date DESC, emp.name, p.code, a.name`, [period, period, projectId, projectId, employeeId, employeeId, clientId, clientId, billingStatus, billingStatus, billable, billable, billable, billable])
+    ORDER BY e.entry_date DESC, emp.name, p.code, a.name`, [businessDate(), period, period, projectId, projectId, employeeId, employeeId, clientId, clientId, billingStatus, billingStatus, billable, billable, billable, billable])
   return rows.map((row) => {
     const rateExists = row.rateId != null && String(row.rateCurrency || '') === String(row.clientCurrency || '') && Boolean(row.clientActive)
     const isProjectBillable = row.activityCategory === 'project' && Boolean(row.billable)
@@ -184,9 +184,9 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
         FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN timesheet_entries e ON e.project_id = p.id
         LEFT JOIN timesheets t ON t.id = e.timesheet_id LEFT JOIN activities a ON a.id = e.activity_id
         LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = e.activity_id
-        LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < CURDATE())
+        LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
         LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id
-        GROUP BY p.id, c.id ORDER BY p.active DESC, p.code`)
+        GROUP BY p.id, c.id ORDER BY p.active DESC, p.code`, [businessDate()])
       return res.json({ projects: projects.map((project) => ({ ...project, approvedHours: Number(project.approvedHours), billableHours: Number(project.billableHours), nonBillableHours: Number(project.nonBillableHours), unbilledHours: Number(project.unbilledHours), billedHours: Number(project.billedHours), unbilledAmount: Number(project.unbilledAmount), billedAmount: Number(project.billedAmount) })) })
     } catch (error) { next(error) }
   })
@@ -245,8 +245,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       const previousOpen = existing.find((rate) => !rate.effectiveTo && String(rate.effectiveFrom) < effectiveFrom && Boolean(rate.active))
       let previousEndDate: string | null = null
       if (previousOpen) {
-        const priorEnd = new Date(`${effectiveFrom}T00:00:00Z`); priorEnd.setUTCDate(priorEnd.getUTCDate() - 1)
-        previousEndDate = priorEnd.toISOString().slice(0, 10)
+        previousEndDate = previousCalendarDate(effectiveFrom)
         await connection.query('UPDATE project_billing_rates SET effective_to = ?, active = FALSE WHERE id = ?', [previousEndDate, previousOpen.id])
       }
       const overlapping = existing.find((rate) => Number(rate.id) !== Number(previousOpen?.id) && effectiveFrom <= String(rate.effectiveTo || '9999-12-31') && (!effectiveTo || effectiveTo >= String(rate.effectiveFrom)))
@@ -274,8 +273,8 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       if (active && (!project?.currency || before.currency !== project.currency)) { await connection.rollback(); return res.status(409).json({ message: 'Rate currency must match the linked client currency.' }) }
       if (active && rates.some((rate) => Number(rate.id) !== rateId && String(before.effectiveFrom) <= String(rate.effectiveTo || '9999-12-31'))) { await connection.rollback(); return res.status(409).json({ message: 'Reactivating this rate would overlap another effective billing rate.' }) }
       const [[finalized]] = await connection.query<RowDataPacket[]>("SELECT COUNT(*) AS count FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.billing_rate_id = ? AND i.status = 'finalized'", [rateId])
-      if (!active && Number(finalized?.count || 0) && String(before.effectiveFrom) >= new Date().toISOString().slice(0, 10)) { await connection.rollback(); return res.status(409).json({ message: 'This rate is referenced by finalized work and cannot be deactivated for that effective date.' }) }
-      const endDate = active ? null : !before.effectiveTo ? new Date(Date.now() - 86400000).toISOString().slice(0, 10) : before.effectiveTo
+      if (!active && Number(finalized?.count || 0) && String(before.effectiveFrom) >= businessDate()) { await connection.rollback(); return res.status(409).json({ message: 'This rate is referenced by finalized work and cannot be deactivated for that effective date.' }) }
+      const endDate = active ? null : !before.effectiveTo ? previousCalendarDate(businessDate()) : before.effectiveTo
       if (!active && endDate < before.effectiveFrom) { await connection.rollback(); return res.status(409).json({ message: 'A rate cannot end before its effective-from date.' }) }
       await connection.query('UPDATE project_billing_rates SET active = ?, effective_to = ? WHERE id = ?', [active, endDate, rateId])
       await writeFinanceAudit(connection, req.actor!.id, 'billing_rate_state_changed', 'billing_rate', rateId, before, { ...before, active, effectiveTo: endDate })
@@ -341,7 +340,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
         }
         invoiceIdInfo.push({ entry, rate: rate! })
       }
-      const invoiceNumber = `PI-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`
+      const invoiceNumber = `PI-${businessDate().replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`
       const [invoiceResult] = await connection.query<ResultSetHeader>('INSERT INTO invoices (invoice_number, client_id, period_label, currency, status, created_by_user_id) VALUES (?, ?, ?, ?, \'draft\', ?)', [invoiceNumber, first.clientId, first.periodLabel, first.clientCurrency, req.actor!.id])
       let subtotal = 0
       for (const { entry, rate } of invoiceIdInfo) {
@@ -410,7 +409,6 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       if (!notice) { await connection.rollback(); return res.status(404).json({ message: 'Notification not found.' }) }
       if (!notice.readAt) {
         await connection.query('UPDATE notifications SET read_at = NOW() WHERE id = ?', [notice.id])
-        await writeFinanceAudit(connection, req.actor!.id, 'notification_marked_read', 'notification', Number(notice.id), { readAt: null }, { read: true })
       }
       await connection.commit(); return res.json({ message: 'Notification marked as read.' })
     } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Notification changed during another action. Retry.' }); next(error) } finally { connection.release() }
@@ -445,13 +443,13 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
           COALESCE(SUM(CASE WHEN i.status = 'finalized' THEN il.amount_snapshot ELSE 0 END), 0) AS billedAmount
           FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN timesheet_entries e ON e.project_id = p.id LEFT JOIN timesheets t ON t.id = e.timesheet_id
           LEFT JOIN activities a ON a.id = e.activity_id LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = e.activity_id
-          LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < CURDATE())
-          LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id GROUP BY p.id, c.id ORDER BY p.code`)
+          LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
+          LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id GROUP BY p.id, c.id ORDER BY p.code`, [businessDate()])
         headers = ['Project code', 'Project', 'Client code', 'Client', 'Currency', 'Approved hours', 'Billable hours', 'Non-billable hours', 'Unbilled hours', 'Billed hours', 'Unbilled amount', 'Billed amount']
         rows = projects.map((project) => [project.projectCode, project.projectName, project.clientCode, project.clientName, project.currency, project.approvedHours, project.billableHours, project.nonBillableHours, project.unbilledHours, project.billedHours, project.unbilledAmount, project.billedAmount])
       } else return res.status(404).json({ message: 'Choose approved-work, unbilled-work, invoice-lines, invoices, or project-summary.' })
       const csv = [headers, ...rows].map((line) => line.map(csvCell).join(',')).join('\r\n')
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="pulseai-${kind}-${new Date().toISOString().slice(0, 10)}.csv"`); return res.send(`\uFEFF${csv}`)
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="pulseai-${kind}-${businessDate()}.csv"`); return res.send(`\uFEFF${csv}`)
     } catch (error) { next(error) }
   })
 }

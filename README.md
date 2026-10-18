@@ -78,6 +78,7 @@ At minimum, set a real JWT secret and the MySQL password in `backend/.env`:
 
 ```dotenv
 PORT=4000
+NODE_ENV=development
 CLIENT_ORIGIN=http://localhost:5173
 DB_HOST=localhost
 DB_PORT=3306
@@ -85,7 +86,8 @@ DB_USER=root
 DB_PASSWORD=your_mysql_password
 DB_NAME=pulseai
 JWT_SECRET=replace_with_a_long_random_secret
-SEED_DEMO_DATA=true
+SEED_DEMO_DATA=false
+ENABLE_API_DOCS=false
 DEMO_USER_PASSWORD=replace_with_one_shared_demo_password
 ```
 
@@ -144,7 +146,7 @@ npm run dev
 
 The API listens on `http://localhost:4000` by default.
 
-API documentation is available at [http://localhost:4000/api/docs](http://localhost:4000/api/docs) after the backend starts. The downloadable OpenAPI 3 specification is at [http://localhost:4000/api/openapi.json](http://localhost:4000/api/openapi.json). Swagger UI's **Authorize** button accepts the JWT returned by `/api/auth/login`; role-restricted requests need a token for that role. The documentation uses the same backend origin, so on a deployed backend replace `http://localhost:4000` with its public origin. **Try it out** calls on write endpoints change the connected database.
+API documentation is available outside production at [http://localhost:4000/api/docs](http://localhost:4000/api/docs), with the OpenAPI 3 specification at [http://localhost:4000/api/openapi.json](http://localhost:4000/api/openapi.json). Production disables both endpoints unless `ENABLE_API_DOCS=true`. Swagger UI's **Authorize** button accepts the JWT returned by `/api/auth/login`; role-restricted requests need a token for that role. **Try it out** calls on write endpoints change the connected database.
 
 ### 6. Start the frontend
 
@@ -241,6 +243,7 @@ Important backend variables include:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `PORT` | API listening port | `4000` |
+| `NODE_ENV` | Runtime environment; production hardening and API docs gating | `development` |
 | `CLIENT_ORIGIN` | Allowed browser origin for CORS | `http://localhost:5173` |
 | `DB_HOST` | MySQL host | `localhost` |
 | `DB_PORT` | MySQL port | `3306` |
@@ -252,7 +255,8 @@ Important backend variables include:
 | `MYSQLUSER` / `MYSQLPASSWORD` | Railway MySQL fallback credentials | Blank |
 | `MYSQLDATABASE` | Railway MySQL fallback database name | Blank |
 | `JWT_SECRET` | JWT signing secret | Required |
-| `SEED_DEMO_DATA` | Enable local demonstration records | Disabled unless `true` |
+| `ENABLE_API_DOCS` | Expose API docs in production | Disabled unless `true` |
+| `SEED_DEMO_DATA` | Enable local demonstration records | `false` |
 | `DEMO_USER_PASSWORD` | Shared password used to create all demo role accounts | Blank |
 | `BUSINESS_TIME_ZONE` | Time zone used for deadlines and active periods | `Asia/Kolkata` |
 | `MANAGER_DAILY_HOURS_WARNING_THRESHOLD` | Optional manager warning threshold | Blank |

@@ -13,6 +13,8 @@ import { employeeCanEdit, employeeCanSubmit, managerCanDecide, managerApprovalIn
 import { registerFinanceRoutes } from './financeRoutes.js'
 import { activeReportingPeriod, businessDate } from './reportingPeriod.js'
 import { openApiSpec } from './openapi.js'
+import { verifiedPrimaryGithubEmail } from './githubOAuth.js'
+import { apiDocsAreEnabled } from './docsPolicy.js'
 import { seedDemoShowcase, revertDemoShowcase } from './scripts/demoShowcase.js'
 
 type Role = 'employee' | 'manager' | 'hr' | 'director' | 'finance'
@@ -32,6 +34,7 @@ interface UserRecord extends RowDataPacket {
 
 const app = express()
 app.set('trust proxy', 1)
+app.disable('x-powered-by')
 const port = Number(process.env.PORT || 4000)
 const dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'pulseai'
 const jwtSecret = process.env.JWT_SECRET
@@ -47,16 +50,28 @@ const verifyDbCertificate = Boolean(dbCa) || process.env.DB_SSL_REJECT_UNAUTHORI
 const validRoles = new Set<Role>(['employee', 'manager', 'hr', 'director', 'finance'])
 const githubStateCookie = 'pulseai_github_state'
 
+const jwtSecretPlaceholder = 'replace_this_with_a_long_random_secret'
+const weakJwtSecret = !jwtSecret || jwtSecret.length < 32 || jwtSecret === jwtSecretPlaceholder
+if (process.env.NODE_ENV === 'production' && weakJwtSecret) throw new Error('JWT_SECRET must be at least 32 characters and must not use the example placeholder in production.')
 if (!jwtSecret) throw new Error('JWT_SECRET is required. Copy backend/.env.example to backend/.env and set it.')
+if (weakJwtSecret) console.warn('WARNING: JWT_SECRET is shorter than 32 characters or uses the example placeholder. Set a strong random secret before production.')
 
 app.use(cors({ origin: clientOrigin }))
-app.use(express.json())
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  next()
+})
+app.use(express.json({ limit: '100kb' }))
 
 const require = createRequire(import.meta.url)
 const swaggerUiAssets = dirname(require.resolve('swagger-ui-dist/package.json'))
-app.use('/api/docs/assets', express.static(swaggerUiAssets))
-app.get('/api/openapi.json', (_req, res) => res.json(openApiSpec))
-app.get(['/api/docs', '/api/docs/'], (_req, res) => {
+const apiDocsEnabled = apiDocsAreEnabled()
+if (apiDocsEnabled) app.use('/api/docs/assets', express.static(swaggerUiAssets))
+if (apiDocsEnabled) app.get('/api/openapi.json', (_req, res) => res.json(openApiSpec))
+if (apiDocsEnabled) app.get(['/api/docs', '/api/docs/'], (_req, res) => {
   res.type('html').send(`<!doctype html>
 <html lang="en">
 <head>
@@ -179,6 +194,13 @@ async function initializeDatabase() {
   }
 
   pool = mysql.createPool({ ...baseDbConfig, database: dbName, waitForConnections: true, connectionLimit: 10 })
+  const initLockConnection = await pool.getConnection()
+  let initLockAcquired = false
+  try {
+    const lockName = `pulseai:${dbName}:schema-init`.slice(0, 64)
+    const [[lockResult]] = await initLockConnection.query<RowDataPacket[]>('SELECT GET_LOCK(?, 30) AS acquired', [lockName])
+    if (Number(lockResult?.acquired) !== 1) throw new Error(`Could not acquire database initialization lock for ${dbName} within 30 seconds.`)
+    initLockAcquired = true
   await pool.query(`CREATE TABLE IF NOT EXISTS users (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(120) NOT NULL,
@@ -462,6 +484,7 @@ async function initializeDatabase() {
   await seedHRAccounts()
   await seedFinanceAccounts()
   if (process.env.SEED_DEMO_DATA === 'true') {
+    console.warn('WARNING: SEED_DEMO_DATA=true; startup will create or synchronize demonstration accounts and records in this database.')
     await seedDemoRoleAccounts()
     await seedDemoData()
     await seedDemoEmployeeAccount()
@@ -469,6 +492,10 @@ async function initializeDatabase() {
     await seedDemoApprovals()
     await seedEmployeeWorkspaceData()
     await seedDemoTimesheetDetails()
+  }
+  } finally {
+    try { if (initLockAcquired) await initLockConnection.query('SELECT RELEASE_LOCK(?)', [`pulseai:${dbName}:schema-init`.slice(0, 64)]) }
+    finally { initLockConnection.release() }
   }
 }
 
@@ -1253,14 +1280,14 @@ async function managerOwnsTimesheet(managerId: number, timesheetId: string) {
   return rows[0]
 }
 
-async function managerOwnsEmployee(managerId: number, employeeId: string | number) {
-  const [rows] = await pool.query<RowDataPacket[]>(`SELECT e.id, e.name, e.email, e.employee_code AS employeeCode, e.manager_name AS managerName, d.name AS department
-    FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.id = ? AND e.manager_user_id = ? AND e.active = TRUE LIMIT 1`, [employeeId, managerId])
+async function managerOwnsEmployee(managerId: number, employeeId: string | number, executor: Pick<mysql.Pool | PoolConnection, 'query'> = pool, lock = false) {
+  const [rows] = await executor.query<RowDataPacket[]>(`SELECT e.id, e.name, e.email, e.employee_code AS employeeCode, e.manager_name AS managerName, d.name AS department
+    FROM employees e JOIN departments d ON d.id = e.department_id WHERE e.id = ? AND e.manager_user_id = ? AND e.active = TRUE LIMIT 1${lock ? ' FOR UPDATE' : ''}`, [employeeId, managerId])
   return rows[0]
 }
 
-async function managerOwnsProject(managerId: number, projectId: string | number) {
-  const [rows] = await pool.query<RowDataPacket[]>('SELECT id, code, name, active FROM projects WHERE id = ? AND manager_user_id = ? LIMIT 1', [projectId, managerId])
+async function managerOwnsProject(managerId: number, projectId: string | number, executor: Pick<mysql.Pool | PoolConnection, 'query'> = pool, lock = false) {
+  const [rows] = await executor.query<RowDataPacket[]>(`SELECT id, code, name, active FROM projects WHERE id = ? AND manager_user_id = ? LIMIT 1${lock ? ' FOR UPDATE' : ''}`, [projectId, managerId])
   return rows[0]
 }
 
@@ -1356,24 +1383,31 @@ app.get('/api/manager/projects', requireManager, async (req: AuthenticatedReques
 })
 
 app.post('/api/manager/projects', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
     const code = String(req.body?.code || '').trim().toUpperCase(); const name = String(req.body?.name || '').trim(); const description = String(req.body?.description || '').trim(); const startsOn = String(req.body?.startsOn || '') || null; const endsOn = String(req.body?.endsOn || '') || null
     if (!/^[A-Z0-9][A-Z0-9-_]{1,39}$/.test(code) || name.length < 2 || name.length > 160 || description.length > 500 || (startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) || (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) || (startsOn && endsOn && startsOn > endsOn)) return res.status(400).json({ message: 'Provide a valid project code, name, optional description, and valid dates.' })
-    const [result] = await pool.query<ResultSetHeader>('INSERT INTO projects (code, name, description, starts_on, ends_on, manager_user_id, active) VALUES (?, ?, ?, ?, ?, ?, TRUE)', [code, name, description || null, startsOn, endsOn, req.actor!.id])
-    await writeWorkflowAudit(pool, req.actor!, 'Project created', 'project', Number(result.insertId), `${code} · ${name}`, null, { code, name, description: description || null, startsOn, endsOn, active: true })
+    await connection.beginTransaction()
+    await connection.query('SELECT id FROM users WHERE id = ? AND role = \'manager\' FOR UPDATE', [req.actor!.id])
+    const [result] = await connection.query<ResultSetHeader>('INSERT INTO projects (code, name, description, starts_on, ends_on, manager_user_id, active) VALUES (?, ?, ?, ?, ?, ?, TRUE)', [code, name, description || null, startsOn, endsOn, req.actor!.id])
+    await writeWorkflowAudit(connection, req.actor!, 'Project created', 'project', Number(result.insertId), `${code} · ${name}`, null, { code, name, description: description || null, startsOn, endsOn, active: true })
+    await connection.commit()
     return res.status(201).json({ id: result.insertId, message: 'Project created.' })
-  } catch (error: any) { if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A project with this code already exists.' }); next(error) }
+  } catch (error: any) { await connection.rollback(); if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A project with this code already exists.' }); next(error) } finally { connection.release() }
 })
 
 app.patch('/api/manager/projects/:id', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const project = await managerOwnsProject(req.actor!.id, String(req.params.id)); if (!project) return res.status(404).json({ message: 'Project not found in your managed projects.' })
+    await connection.beginTransaction()
+    const project = await managerOwnsProject(req.actor!.id, String(req.params.id), connection, true); if (!project) { await connection.rollback(); return res.status(404).json({ message: 'Project not found in your managed projects.' }) }
     const name = String(req.body?.name ?? project.name).trim(); const description = String(req.body?.description ?? '').trim(); const active = typeof req.body?.active === 'boolean' ? req.body.active : Boolean(project.active); const startsOn = req.body?.startsOn || null; const endsOn = req.body?.endsOn || null
-    if (name.length < 2 || name.length > 160 || description.length > 500 || (startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) || (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) || (startsOn && endsOn && startsOn > endsOn)) return res.status(400).json({ message: 'Provide valid project details.' })
-    await pool.query('UPDATE projects SET name = ?, description = ?, active = ?, starts_on = ?, ends_on = ? WHERE id = ? AND manager_user_id = ?', [name, description || null, active, startsOn, endsOn, project.id, req.actor!.id])
-    await writeWorkflowAudit(pool, req.actor!, active ? 'Project updated' : 'Project deactivated', 'project', Number(project.id), `${project.code} · ${name}`, { name: project.name, active: Boolean(project.active) }, { name, description: description || null, active })
+    if (name.length < 2 || name.length > 160 || description.length > 500 || (startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) || (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) || (startsOn && endsOn && startsOn > endsOn)) { await connection.rollback(); return res.status(400).json({ message: 'Provide valid project details.' }) }
+    await connection.query('UPDATE projects SET name = ?, description = ?, active = ?, starts_on = ?, ends_on = ? WHERE id = ? AND manager_user_id = ?', [name, description || null, active, startsOn, endsOn, project.id, req.actor!.id])
+    await writeWorkflowAudit(connection, req.actor!, active ? 'Project updated' : 'Project deactivated', 'project', Number(project.id), `${project.code} · ${name}`, { name: project.name, active: Boolean(project.active) }, { name, description: description || null, active })
+    await connection.commit()
     return res.json({ message: active ? 'Project updated.' : 'Project deactivated. Historical entries were preserved.' })
-  } catch (error) { next(error) }
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
 })
 
 app.get('/api/manager/projects/:id/activities', requireManager, async (req: AuthenticatedRequest, res, next) => {
@@ -1385,26 +1419,34 @@ app.get('/api/manager/projects/:id/activities', requireManager, async (req: Auth
 })
 
 app.post('/api/manager/projects/:id/activities', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const project = await managerOwnsProject(req.actor!.id, String(req.params.id)); if (!project) return res.status(404).json({ message: 'Project not found in your managed projects.' })
-    const name = String(req.body?.name || '').trim(); if (name.length < 2 || name.length > 120) return res.status(400).json({ message: 'Provide an activity name between 2 and 120 characters.' })
-    const [existing] = await pool.query<RowDataPacket[]>('SELECT id FROM activities WHERE name = ? AND category = ? LIMIT 1', [name, 'project'])
-    const activityId = existing[0]?.id || (await pool.query<ResultSetHeader>('INSERT INTO activities (name, category, active) VALUES (?, ?, TRUE)', [name, 'project']))[0].insertId
-    await pool.query('INSERT INTO project_activity_assignments (project_id, activity_id, active, created_by_user_id) VALUES (?, ?, TRUE, ?) ON DUPLICATE KEY UPDATE active = TRUE, created_by_user_id = VALUES(created_by_user_id)', [project.id, activityId, req.actor!.id])
-    await writeWorkflowAudit(pool, req.actor!, 'Project activity assigned', 'project', Number(project.id), `${project.code} · ${name}`, null, { activityId: Number(activityId), active: true })
+    await connection.beginTransaction()
+    const project = await managerOwnsProject(req.actor!.id, String(req.params.id), connection, true); if (!project) { await connection.rollback(); return res.status(404).json({ message: 'Project not found in your managed projects.' }) }
+    const name = String(req.body?.name || '').trim(); if (name.length < 2 || name.length > 120) { await connection.rollback(); return res.status(400).json({ message: 'Provide an activity name between 2 and 120 characters.' }) }
+    const [existing] = await connection.query<RowDataPacket[]>('SELECT id FROM activities WHERE name = ? AND category = ? LIMIT 1 FOR UPDATE', [name, 'project'])
+    const activityId = existing[0]?.id || (await connection.query<ResultSetHeader>('INSERT INTO activities (name, category, active) VALUES (?, ?, TRUE)', [name, 'project']))[0].insertId
+    await connection.query('SELECT id FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? FOR UPDATE', [project.id, activityId])
+    await connection.query('INSERT INTO project_activity_assignments (project_id, activity_id, active, created_by_user_id) VALUES (?, ?, TRUE, ?) ON DUPLICATE KEY UPDATE active = TRUE, created_by_user_id = VALUES(created_by_user_id)', [project.id, activityId, req.actor!.id])
+    await writeWorkflowAudit(connection, req.actor!, 'Project activity assigned', 'project', Number(project.id), `${project.code} · ${name}`, null, { activityId: Number(activityId), active: true })
+    await connection.commit()
     return res.status(201).json({ message: 'Project activity saved.', activityId })
-  } catch (error) { next(error) }
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
 })
 
 app.patch('/api/manager/projects/:projectId/activities/:activityId', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const project = await managerOwnsProject(req.actor!.id, String(req.params.projectId)); if (!project) return res.status(404).json({ message: 'Project not found in your managed projects.' })
-    if (typeof req.body?.active !== 'boolean') return res.status(400).json({ message: 'Provide an active state.' })
-    const [result] = await pool.query<ResultSetHeader>('UPDATE project_activity_assignments SET active = ? WHERE project_id = ? AND activity_id = ?', [req.body.active, project.id, req.params.activityId])
-    if (!result.affectedRows) return res.status(404).json({ message: 'Project activity not found.' })
-    await writeWorkflowAudit(pool, req.actor!, req.body.active ? 'Project activity activated' : 'Project activity deactivated', 'project', Number(project.id), `${project.code} · activity #${req.params.activityId}`, { active: !req.body.active }, { active: req.body.active })
+    await connection.beginTransaction()
+    const project = await managerOwnsProject(req.actor!.id, String(req.params.projectId), connection, true); if (!project) { await connection.rollback(); return res.status(404).json({ message: 'Project not found in your managed projects.' }) }
+    if (typeof req.body?.active !== 'boolean') { await connection.rollback(); return res.status(400).json({ message: 'Provide an active state.' }) }
+    const [existing] = await connection.query<RowDataPacket[]>('SELECT active FROM project_activity_assignments WHERE project_id = ? AND activity_id = ? FOR UPDATE', [project.id, req.params.activityId])
+    if (!existing.length) { await connection.rollback(); return res.status(404).json({ message: 'Project activity not found.' }) }
+    await connection.query('UPDATE project_activity_assignments SET active = ? WHERE project_id = ? AND activity_id = ?', [req.body.active, project.id, req.params.activityId])
+    await writeWorkflowAudit(connection, req.actor!, req.body.active ? 'Project activity activated' : 'Project activity deactivated', 'project', Number(project.id), `${project.code} · activity #${req.params.activityId}`, { active: Boolean(existing[0]?.active) }, { active: req.body.active })
+    await connection.commit()
     return res.json({ message: req.body.active ? 'Activity activated.' : 'Activity deactivated. Historical entries were preserved.' })
-  } catch (error) { next(error) }
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
 })
 
 app.get('/api/manager/projects/:id/assignments', requireManager, async (req: AuthenticatedRequest, res, next) => {
@@ -1417,27 +1459,35 @@ app.get('/api/manager/projects/:id/assignments', requireManager, async (req: Aut
 })
 
 app.post('/api/manager/projects/:id/assignments', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const project = await managerOwnsProject(req.actor!.id, String(req.params.id)); if (!project) return res.status(404).json({ message: 'Project not found in your managed projects.' })
-    const employee = await managerOwnsEmployee(req.actor!.id, Number(req.body?.employeeId)); if (!employee) return res.status(404).json({ message: 'Employee not found in your team.' })
+    await connection.beginTransaction()
+    const project = await managerOwnsProject(req.actor!.id, String(req.params.id), connection, true); if (!project) { await connection.rollback(); return res.status(404).json({ message: 'Project not found in your managed projects.' }) }
+    const employee = await managerOwnsEmployee(req.actor!.id, Number(req.body?.employeeId), connection, true); if (!employee) { await connection.rollback(); return res.status(404).json({ message: 'Employee not found in your team.' }) }
     const startsOn = String(req.body?.startsOn || '') || null; const endsOn = String(req.body?.endsOn || '') || null
-    if ((startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) || (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) || (startsOn && endsOn && startsOn > endsOn)) return res.status(400).json({ message: 'Provide valid assignment dates.' })
-    await pool.query('INSERT INTO employee_project_assignments (employee_id, project_id, active, starts_on, ends_on) VALUES (?, ?, TRUE, ?, ?) ON DUPLICATE KEY UPDATE active = TRUE, starts_on = VALUES(starts_on), ends_on = VALUES(ends_on)', [employee.id, project.id, startsOn, endsOn])
-    await writeWorkflowAudit(pool, req.actor!, 'Employee assigned to project', 'project', Number(project.id), `${employee.employeeCode} · ${project.code}`, null, { employeeId: Number(employee.id), active: true, startsOn, endsOn })
+    if ((startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) || (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) || (startsOn && endsOn && startsOn > endsOn)) { await connection.rollback(); return res.status(400).json({ message: 'Provide valid assignment dates.' }) }
+    await connection.query('SELECT id FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? FOR UPDATE', [employee.id, project.id])
+    await connection.query('INSERT INTO employee_project_assignments (employee_id, project_id, active, starts_on, ends_on) VALUES (?, ?, TRUE, ?, ?) ON DUPLICATE KEY UPDATE active = TRUE, starts_on = VALUES(starts_on), ends_on = VALUES(ends_on)', [employee.id, project.id, startsOn, endsOn])
+    await writeWorkflowAudit(connection, req.actor!, 'Employee assigned to project', 'project', Number(project.id), `${employee.employeeCode} · ${project.code}`, null, { employeeId: Number(employee.id), active: true, startsOn, endsOn })
+    await connection.commit()
     return res.status(201).json({ message: 'Employee assigned to project.' })
-  } catch (error) { next(error) }
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
 })
 
 app.patch('/api/manager/projects/:projectId/assignments/:employeeId', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
   try {
-    const project = await managerOwnsProject(req.actor!.id, String(req.params.projectId)); const employee = await managerOwnsEmployee(req.actor!.id, String(req.params.employeeId))
-    if (!project || !employee) return res.status(404).json({ message: 'Project or employee not found in your authorized team.' })
-    if (typeof req.body?.active !== 'boolean') return res.status(400).json({ message: 'Provide an active state.' })
-    const [result] = await pool.query<ResultSetHeader>('UPDATE employee_project_assignments SET active = ?, ends_on = CASE WHEN ? THEN NULL ELSE COALESCE(ends_on, CURDATE()) END WHERE employee_id = ? AND project_id = ?', [req.body.active, req.body.active, employee.id, project.id])
-    if (!result.affectedRows) return res.status(404).json({ message: 'Project assignment not found.' })
-    await writeWorkflowAudit(pool, req.actor!, req.body.active ? 'Project assignment activated' : 'Project assignment ended', 'project', Number(project.id), `${employee.employeeCode} · ${project.code}`, { active: !req.body.active }, { employeeId: Number(employee.id), active: req.body.active })
+    await connection.beginTransaction()
+    const project = await managerOwnsProject(req.actor!.id, String(req.params.projectId), connection, true); const employee = await managerOwnsEmployee(req.actor!.id, String(req.params.employeeId), connection, true)
+    if (!project || !employee) { await connection.rollback(); return res.status(404).json({ message: 'Project or employee not found in your authorized team.' }) }
+    if (typeof req.body?.active !== 'boolean') { await connection.rollback(); return res.status(400).json({ message: 'Provide an active state.' }) }
+    const [assignments] = await connection.query<RowDataPacket[]>('SELECT active, ends_on FROM employee_project_assignments WHERE employee_id = ? AND project_id = ? FOR UPDATE', [employee.id, project.id])
+    if (!assignments.length) { await connection.rollback(); return res.status(404).json({ message: 'Project assignment not found.' }) }
+    await connection.query('UPDATE employee_project_assignments SET active = ?, ends_on = CASE WHEN ? THEN NULL ELSE COALESCE(ends_on, ?) END WHERE employee_id = ? AND project_id = ?', [req.body.active, req.body.active, businessDate(), employee.id, project.id])
+    await writeWorkflowAudit(connection, req.actor!, req.body.active ? 'Project assignment activated' : 'Project assignment ended', 'project', Number(project.id), `${employee.employeeCode} · ${project.code}`, { active: Boolean(assignments[0]?.active) }, { employeeId: Number(employee.id), active: req.body.active })
+    await connection.commit()
     return res.json({ message: req.body.active ? 'Assignment activated.' : 'Assignment ended. Historical entries were preserved.' })
-  } catch (error) { next(error) }
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
 })
 
 app.get('/api/manager/timesheets', requireManager, async (req: AuthenticatedRequest, res, next) => {
@@ -1951,7 +2001,7 @@ app.get('/api/auth/github', authRateLimit, (req: Request, res: Response) => {
   return res.redirect(authorization.toString())
 })
 
-app.get('/api/auth/github/callback', async (req: Request, res: Response, next: NextFunction) => {
+app.get('/api/auth/github/callback', authRateLimit, async (req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Set-Cookie', oauthCookie('', 0))
   const finish = (message: string) => res.redirect(`${clientOrigin}/#oauth_error=${encodeURIComponent(message)}`)
   try {
@@ -1977,12 +2027,11 @@ app.get('/api/auth/github/callback', async (req: Request, res: Response, next: N
     const profileResponse = await fetch('https://api.github.com/user', { headers: githubHeaders })
     const profile = await profileResponse.json() as { id?: number; login?: string; name?: string | null; email?: string | null; avatar_url?: string | null }
     if (!profileResponse.ok || !profile.id) return finish('GitHub could not verify this account.')
-    let email = profile.email?.toLowerCase() || ''
-    if (!email) {
-      const emailsResponse = await fetch('https://api.github.com/user/emails', { headers: githubHeaders })
-      const emails = await emailsResponse.json() as Array<{ email: string; primary: boolean; verified: boolean }>
-      email = emails.find((item) => item.primary && item.verified)?.email?.toLowerCase() || emails.find((item) => item.verified)?.email?.toLowerCase() || ''
-    }
+    const email = await verifiedPrimaryGithubEmail(async (url) => {
+      const response = await fetch(url, { headers: githubHeaders })
+      return { ok: response.ok, json: () => response.json() }
+    })
+    if (!email) return finish('GitHub must provide a verified primary email address for this account.')
     const githubId = String(profile.id)
     const [rows] = await pool.query<UserRecord[]>('SELECT * FROM users WHERE github_id = ? OR (? <> \'\' AND LOWER(email) = ?) LIMIT 1', [githubId, email, email])
     const user = rows[0]
@@ -2038,7 +2087,10 @@ initializeDatabase()
   .then(() => {
     registerFinanceRoutes(app, pool, requireFinance)
     app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-      console.error(error)
+      if (process.env.NODE_ENV === 'production') {
+        const details = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {}
+        console.error({ code: typeof details.code === 'string' ? details.code : 'INTERNAL_ERROR', message: typeof details.message === 'string' ? details.message : 'Request failed.' })
+      } else console.error(error)
       res.status(500).json({ message: 'Something went wrong. Please try again.' })
     })
     return app.listen(port, () => console.log(`Pulse AI API running at http://localhost:${port}`))

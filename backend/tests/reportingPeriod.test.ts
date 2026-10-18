@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { activeReportingPeriod, businessDate } from '../reportingPeriod.js'
+import { activeReportingPeriod, businessDate, previousCalendarDate } from '../reportingPeriod.js'
 
 function fakePeriod(startsOn: string, endsOn: string) {
   let selectedDate = ''
@@ -33,4 +33,10 @@ test('business date honors time-zone boundary near UTC midnight', () => {
   const instant = new Date('2026-10-11T20:00:00Z')
   assert.equal(businessDate(instant, 'Asia/Kolkata'), '2026-10-12')
   assert.equal(businessDate(instant, 'America/Los_Angeles'), '2026-10-11')
+})
+
+test('previous business calendar date is stable across UTC midnight boundaries', () => {
+  const businessToday = businessDate(new Date('2026-10-14T18:40:00Z'), 'Asia/Kolkata')
+  assert.equal(businessToday, '2026-10-15')
+  assert.equal(previousCalendarDate(businessToday), '2026-10-14')
 })

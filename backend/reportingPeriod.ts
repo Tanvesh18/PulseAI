@@ -16,6 +16,12 @@ export function businessDate(now = new Date(), timeZone = process.env.BUSINESS_T
   return `${value.year}-${value.month}-${value.day}`
 }
 
+export function previousCalendarDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year!, month! - 1, day! - 1))
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
 export async function activeReportingPeriod(executor: Pick<Pool | PoolConnection, 'query'>, today = businessDate()) {
   const [rows] = await executor.query<RowDataPacket[]>(`SELECT p.id, p.label, DATE_FORMAT(p.starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(p.ends_on, '%Y-%m-%d') AS endsOn,
     DATE_FORMAT(p.submission_deadline, '%Y-%m-%d') AS submissionDeadline, p.standard_daily_hours AS standardDailyHours,

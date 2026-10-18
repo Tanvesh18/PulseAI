@@ -18,7 +18,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     return value
   }
   const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
-  let server: ChildProcess | undefined; let port = 0; let managerId = 0; let outsiderManagerId = 0; let employeeId = 0; let outsiderEmployeeId = 0; let managerEmail = ''; let outsiderManagerEmail = ''; let employeeEmail = ''; let outsiderEmail = ''; let projectId = 0; let outsiderProjectId = 0; let activityId = 0; let sheetId = 0; let concurrentSheetId = 0; let draftSheetId = 0; let outsiderSheetId = 0; let entryId = 0; let employeeUserId = 0; let outsiderEmployeeUserId = 0; let periodId = 0; let periodLabel = ''; let departmentId = 0; let serverOutput = ''
+  let server: ChildProcess | undefined; let port = 0; let managerId = 0; let outsiderManagerId = 0; let employeeId = 0; let outsiderEmployeeId = 0; let managerEmail = ''; let outsiderManagerEmail = ''; let employeeEmail = ''; let outsiderEmail = ''; let projectId = 0; let outsiderProjectId = 0; let activityId = 0; let sheetId = 0; let concurrentSheetId = 0; let draftSheetId = 0; let outsiderSheetId = 0; let entryId = 0; let employeeUserId = 0; let outsiderEmployeeUserId = 0; let periodId = 0; let periodLabel = ''; let departmentId = 0; let serverOutput = ''; let auditFailureTrigger = false
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`
   const testPeriodIds: number[] = []
   const password = `Integration-${suffix}-Pass!`
@@ -64,11 +64,13 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
 
     // Keep this isolated from application/demo seeding: in particular the demo
     // seed assigns every employee to every project, which would mutate unrelated rows.
-    server = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { cwd: backendDir, env: { ...process.env, PORT: String(port), SEED_DEMO_DATA: 'false', MANAGER_DAILY_HOURS_WARNING_THRESHOLD: '8' }, stdio: ['ignore', 'pipe', 'pipe'] })
+    server = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { cwd: backendDir, env: { ...process.env, PORT: String(port), NODE_ENV: 'development', ENABLE_API_DOCS: 'false', SEED_DEMO_DATA: 'false', MANAGER_DAILY_HOURS_WARNING_THRESHOLD: '8' }, stdio: ['ignore', 'pipe', 'pipe'] })
     server.stdout?.on('data', chunk => { serverOutput += chunk.toString() }); server.stderr?.on('data', chunk => { serverOutput += chunk.toString() })
     let healthy = false
     for (let attempt = 0; attempt < 120; attempt++) { if (server.exitCode !== null) break; try { const response = await fetch(`http://127.0.0.1:${port}/api/health`); if (response.ok) { healthy = true; break } } catch { /* wait for startup */ } await new Promise(resolveWait => setTimeout(resolveWait, 250)) }
     assert.equal(healthy, true, `Test API failed to start: ${serverOutput}`)
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/docs`)).status, 200, 'API docs are available in development.')
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/openapi.json`)).status, 200, 'OpenAPI is available in development.')
 
     const managerToken = await token(managerEmail, 'manager'); const outsiderToken = await token(outsiderManagerEmail, 'manager'); const employeeToken = await token(employeeEmail, 'employee'); const outsiderEmployeeToken = await token(outsiderEmail, 'employee')
     const periods = await request('/manager/periods', managerToken); assert.equal(periods.status, 200); assert.ok(periods.data.periods.some((item: any) => item.periodLabel === periodLabel))
@@ -79,6 +81,28 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     const filtered = await request(`/manager/timesheets?status=submitted&employeeId=${employeeId}&period=${encodeURIComponent(periodLabel)}`, managerToken); assert.equal(filtered.status, 200); assert.ok(filtered.data.timesheets.some((item: any) => Number(item.id) === sheetId)); assert.ok(!filtered.data.timesheets.some((item: any) => Number(item.employeeId) === outsiderEmployeeId))
     assert.equal((await request(`/manager/timesheets/${draftSheetId}/approve`, managerToken, 'POST', { version: 1 })).status, 404)
     const periodsWrongTeam = await request('/manager/periods', outsiderToken); assert.equal(periodsWrongTeam.status, 200)
+
+    await db.query(`CREATE TRIGGER trg_test_manager_audit_failure BEFORE INSERT ON audit_events FOR EACH ROW BEGIN IF NEW.actor_role = 'manager' AND (NEW.target LIKE 'AF-%' OR NEW.target LIKE 'IT-${suffix}%') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced test audit failure'; END IF; END`)
+    auditFailureTrigger = true
+    const failedAuditCode = `AF-${suffix}`
+    assert.equal((await request('/manager/projects', managerToken, 'POST', { code: failedAuditCode, name: 'Audit rollback probe' })).status, 500)
+    const [[rolledBackProject]] = await db.query<any[]>('SELECT COUNT(*) AS count FROM projects WHERE code = ?', [failedAuditCode])
+    assert.equal(Number(rolledBackProject.count), 0, 'Project creation rolls back when its audit write fails.')
+    assert.equal((await request(`/manager/projects/${projectId}`, managerToken, 'PATCH', { name: 'Must roll back', description: 'Audit failure probe', startsOn: period.startsOn, endsOn: period.startsOn })).status, 500)
+    const [[unchangedProject]] = await db.query<any[]>('SELECT name FROM projects WHERE id = ?', [projectId]); assert.equal(unchangedProject.name, 'Integration project')
+    await db.query('UPDATE project_activity_assignments SET active = FALSE WHERE project_id = ? AND activity_id = ?', [projectId, activityId])
+    assert.equal((await request(`/manager/projects/${projectId}/activities`, managerToken, 'POST', { name: `Integration activity ${suffix}` })).status, 500)
+    const [[activityAfterCreateFailure]] = await db.query<any[]>('SELECT active FROM project_activity_assignments WHERE project_id = ? AND activity_id = ?', [projectId, activityId]); assert.equal(Boolean(activityAfterCreateFailure.active), false)
+    await db.query('UPDATE project_activity_assignments SET active = TRUE WHERE project_id = ? AND activity_id = ?', [projectId, activityId])
+    assert.equal((await request(`/manager/projects/${projectId}/activities/${activityId}`, managerToken, 'PATCH', { active: false })).status, 500)
+    const [[activityAfterEditFailure]] = await db.query<any[]>('SELECT active FROM project_activity_assignments WHERE project_id = ? AND activity_id = ?', [projectId, activityId]); assert.equal(Boolean(activityAfterEditFailure.active), true)
+    await db.query('UPDATE employee_project_assignments SET active = FALSE WHERE employee_id = ? AND project_id = ?', [employeeId, projectId])
+    assert.equal((await request(`/manager/projects/${projectId}/assignments`, managerToken, 'POST', { employeeId, startsOn: period.startsOn })).status, 500)
+    const [[assignmentAfterCreateFailure]] = await db.query<any[]>('SELECT active FROM employee_project_assignments WHERE employee_id = ? AND project_id = ?', [employeeId, projectId]); assert.equal(Boolean(assignmentAfterCreateFailure.active), false)
+    await db.query('UPDATE employee_project_assignments SET active = TRUE WHERE employee_id = ? AND project_id = ?', [employeeId, projectId])
+    assert.equal((await request(`/manager/projects/${projectId}/assignments/${employeeId}`, managerToken, 'PATCH', { active: false })).status, 500)
+    const [[assignmentAfterEditFailure]] = await db.query<any[]>('SELECT active FROM employee_project_assignments WHERE employee_id = ? AND project_id = ?', [employeeId, projectId]); assert.equal(Boolean(assignmentAfterEditFailure.active), true)
+    await db.query('DROP TRIGGER IF EXISTS trg_test_manager_audit_failure'); auditFailureTrigger = false
 
     const projectUpdate = await request(`/manager/projects/${projectId}`, managerToken, 'PATCH', { name: 'Updated integration project', description: 'Editable detail', startsOn: period.startsOn, endsOn: period.startsOn }); assert.equal(projectUpdate.status, 200)
     assert.equal((await request(`/manager/projects/${outsiderProjectId}`, managerToken, 'PATCH', { name: 'Unauthorized' })).status, 404)
@@ -121,6 +145,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     assert.ok(Date.now() - missingStarted < 8000, 'Nonexistent decisions must finish promptly.')
     assert.ok(missingDecisions.every(item => item.status === 404))
   } finally {
+    if (auditFailureTrigger) await db.query('DROP TRIGGER IF EXISTS trg_test_manager_audit_failure').catch(() => undefined)
     if (server && server.exitCode === null) { server.kill(); await new Promise<void>(resolveExit => { const timer = setTimeout(resolveExit, 3000); server?.once('exit', () => { clearTimeout(timer); resolveExit() }) }) }
     if (departmentId) {
       const userIds = [managerId, outsiderManagerId, employeeUserId, outsiderEmployeeUserId].filter(Boolean); const employeeIds = [employeeId, outsiderEmployeeId].filter(Boolean); const projectIds = [projectId, outsiderProjectId].filter(Boolean); const knownTimesheetIds = [sheetId, concurrentSheetId, draftSheetId, outsiderSheetId].filter(Boolean)

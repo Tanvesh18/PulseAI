@@ -57,7 +57,7 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     assert.equal((await request(`/finance/notifications/${noticeId}/read`, financeToken, 'POST')).status, 200)
     const [atomicAudits] = await db.query<any[]>("SELECT action,actor_user_id FROM finance_audit_events WHERE actor_user_id = ? AND action IN ('client_created','client_updated','project_client_changed','notification_marked_read')", [financeId])
     assert.equal(atomicAudits.filter((row) => row.action === 'project_client_changed').length, 2)
-    assert.equal(atomicAudits.filter((row) => row.action === 'notification_marked_read').length, 1)
+    assert.equal(atomicAudits.filter((row) => row.action === 'notification_marked_read').length, 0)
     assert.ok(atomicAudits.every((row) => Number(row.actor_user_id) === financeId))
     const configuredRate = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 125, currency: 'USD', effectiveFrom: period.startsOn }); assert.equal(configuredRate.status, 201, JSON.stringify(configuredRate.data))
     const oldRateId = Number(configuredRate.data.rateId)
