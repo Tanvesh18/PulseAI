@@ -24,7 +24,7 @@ const Github = ({ size = 18 }: { size?: number }) => <svg aria-hidden="true" wid
 declare global { interface Window { google?: { accounts: { id: { initialize: (config: { client_id: string; callback: (response: { credential: string }) => void }) => void; renderButton: (element: HTMLElement, options: Record<string, string | number>) => void } } } } }
 
 async function api(path: string, body: object) {
-  return requestJson<{ token: string; user: User }>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), fallbackMessage: 'Unable to sign in. Check your details and try again.' })
+  return requestJson<{ token: string; user: User }>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), fallbackMessage: 'Unable to sign in. Check your details and try again.', skipUnauthorizedHandling: true })
 }
 
 const meta = {
@@ -70,7 +70,7 @@ function App() {
   useEffect(() => { const timer = window.setInterval(() => { if (window.google) { setGoogleReady(true); window.clearInterval(timer) } }, 150); return () => window.clearInterval(timer) }, [])
   useEffect(() => { if (!googleClientId || !googleReady || !window.google || !googleButton.current) return; googleButton.current.innerHTML = ''; window.google.accounts.id.initialize({ client_id: googleClientId, callback: async ({ credential }) => { setLoading(true); try { completeSignIn(await api('/auth/google', { credential, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Google sign-in failed.') } finally { setLoading(false) } } }); window.google.accounts.id.renderButton(googleButton.current, { theme: 'outline', size: 'large', width: 320, text: 'signin_with' }) }, [role, googleClientId, googleReady])
   const chooseRole = (next: Role) => { setRole(next); setRegistering(false); setMessage('') }
-  const submit = async (event: FormEvent) => { event.preventDefault(); setMessage(''); setLoading(true); try { completeSignIn(registering ? await api('/auth/register', { name, email, password, activationCode, role: 'employee' }) : await api('/auth/login', { email, password, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to continue.') } finally { setLoading(false) } }
+  const submit = async (event: FormEvent) => { event.preventDefault(); setMessage(''); if (registering && (!confirmPassword || password !== confirmPassword)) { setErrors(current => ({ ...current, confirmPassword: !confirmPassword ? 'Confirm your password.' : 'Passwords do not match.' })); return } setLoading(true); try { completeSignIn(registering ? await api('/auth/register', { name, email, password, activationCode, role: 'employee' }) : await api('/auth/login', { email, password, role })) } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to continue.') } finally { setLoading(false) } }
   if (user?.role === 'director') return <DirectorDashboard user={{ ...user, role: 'director' }} onSignOut={signOut} />
   if (user?.role === 'employee') return <EmployeeDashboard user={{ ...user, role: 'employee' }} onSignOut={signOut} />
   if (user?.role === 'manager') return <ManagerDashboard user={{ ...user, role: 'manager' }} onSignOut={signOut} />

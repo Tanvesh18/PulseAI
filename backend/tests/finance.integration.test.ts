@@ -7,13 +7,17 @@ import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import { createTestPeriod } from './testPeriod.js'
+import { isolatedIntegrationDatabaseName } from './integrationDatabase.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
 
 test('Finance processes approved work once and preserves finalized rate snapshots', { skip: !enabled }, async () => {
   const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Set ${key} in backend/.env to run Finance integration tests.`); return value }
-  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
+  const testDatabaseName = isolatedIntegrationDatabaseName()
+  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: testDatabaseName, dateStrings: true })
+  const [[databaseIdentity]] = await db.query<any[]>('SELECT DATABASE() AS name')
+  assert.equal(databaseIdentity.name, testDatabaseName, 'Finance integration tests must use the explicitly isolated database.')
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`; const password = `Finance-${suffix}-Pass!`; const financeEmail = `finance-${suffix}@pulseai.integration`; const otherEmail = `director-${suffix}@pulseai.integration`
   const testPeriodIds: number[] = []
   let server: ChildProcess | undefined; let port = 0; let financeId = 0; let otherId = 0; let projectId = 0; let noRateProjectId = 0; let activityId = 0; let internalActivityId = 0; let clientId = 0; let apiClientId = 0; let noticeId = 0; let employeeId = 0; let timesheetId = 0; let entryId = 0; let reusableEntryId = 0; let unapprovedEntryId = 0; let noRateEntryId = 0; let smallEntryId = 0; let invoiceId = 0; const cancelledInvoiceIds: number[] = []; let serverOutput = ''
@@ -61,6 +65,7 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     assert.ok(atomicAudits.every((row) => Number(row.actor_user_id) === financeId))
     const configuredRate = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 125, currency: 'USD', effectiveFrom: period.startsOn }); assert.equal(configuredRate.status, 201, JSON.stringify(configuredRate.data))
     const oldRateId = Number(configuredRate.data.rateId)
+    const invalidRateDate = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 200, currency: 'USD', effectiveFrom: '2026-02-31' }); assert.equal(invalidRateDate.status, 400)
     assert.equal((await request(`/finance/projects/${projectId}/activities/${internalActivityId}`, financeToken, 'PATCH', { billable: true })).status, 404, 'An activity outside this project cannot be changed.')
     await db.query('INSERT INTO project_activity_assignments (project_id,activity_id,active,created_by_user_id,billable) VALUES (?,?,TRUE,?,NULL)', [projectId, internalActivityId, financeId])
     assert.equal((await request(`/finance/projects/${projectId}/activities/${internalActivityId}`, financeToken, 'PATCH', { billable: true })).status, 400, 'Internal activities cannot be made billable.')
@@ -69,6 +74,9 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     assert.equal(work.data.entries.some((item: any) => Number(item.entryId) === unapprovedEntryId), false, 'Submitted employee entries must not be visible to Finance.')
     const missingRate = work.data.entries.find((item: any) => Number(item.entryId) === noRateEntryId); assert.ok(missingRate); assert.equal(missingRate.eligibleForInvoice, false); assert.match(missingRate.exception, /No billing rate/)
     assert.equal((await request('/finance/invoices', financeToken, 'POST', { entryIds: [unapprovedEntryId] })).status, 409)
+    const hiddenEntry = await request('/finance/invoices', financeToken, 'POST', { entryIds: [unapprovedEntryId] })
+    const unknownEntry = await request('/finance/invoices', financeToken, 'POST', { entryIds: [Number.MAX_SAFE_INTEGER] })
+    assert.equal(hiddenEntry.status, unknownEntry.status); assert.equal(hiddenEntry.data.message, unknownEntry.data.message, 'Ineligible and unknown source IDs must not reveal private work.')
     assert.equal((await request(`/finance/entries/${entryId}`, financeToken, 'PATCH', { hours: 999 })).status, 404, 'Finance does not have an API to change approved employee hours.')
     const draft = await request('/finance/invoices', financeToken, 'POST', { entryIds: [entryId] }); assert.equal(draft.status, 201, JSON.stringify(draft.data)); invoiceId = draft.data.invoiceId
     assert.equal((await request('/finance/invoices', financeToken, 'POST', { entryIds: [entryId] })).status, 409)
@@ -76,15 +84,55 @@ test('Finance processes approved work once and preserves finalized rate snapshot
     assert.equal((await request(`/finance/invoices/${releasable.data.invoiceId}`, financeToken, 'DELETE')).status, 200)
     const cancelled = await request(`/finance/invoices/${releasable.data.invoiceId}`, financeToken); assert.equal(cancelled.data.invoice.status, 'cancelled'); assert.equal(Number(cancelled.data.invoice.cancelledLineCount), 1)
     const cancellationAudit = await request('/finance/audit', financeToken); const cancelEvent = cancellationAudit.data.events.find((event: any) => Number(event.entityId) === Number(releasable.data.invoiceId) && event.action === 'invoice_draft_cancelled'); assert.ok(cancelEvent); assert.match(cancelEvent.beforeState, new RegExp(String(reusableEntryId)))
-    const redraft = await request('/finance/invoices', financeToken, 'POST', { entryIds: [reusableEntryId] }); assert.equal(redraft.status, 201, 'Cancelled draft source work should become eligible again.'); cancelledInvoiceIds.push(Number(redraft.data.invoiceId)); assert.equal((await request(`/finance/invoices/${redraft.data.invoiceId}`, financeToken, 'DELETE')).status, 200)
+    const redraftRace = await Promise.all([request('/finance/invoices', financeToken, 'POST', { entryIds: [reusableEntryId] }), request('/finance/invoices', financeToken, 'POST', { entryIds: [reusableEntryId] })])
+    assert.deepEqual(redraftRace.map(result => result.status).sort(), [201, 409], 'Concurrent draft creation must reserve a source once.')
+    const redraft = redraftRace.find(result => result.status === 201)!; cancelledInvoiceIds.push(Number(redraft.data.invoiceId)); assert.equal((await request(`/finance/invoices/${redraft.data.invoiceId}`, financeToken, 'DELETE')).status, 200)
+    assert.equal((await request(`/finance/invoices/${invoiceId}/ready`, financeToken, 'POST')).status, 200)
+    assert.equal((await request(`/finance/clients/${clientId}`, financeToken, 'PATCH', { active: false })).status, 200)
+    const invalidReady = await request(`/finance/invoices/${invoiceId}/finalize`, financeToken, 'POST')
+    assert.equal(invalidReady.status, 409); assert.match(invalidReady.data.message, /Return this Ready invoice to Draft/)
+    assert.equal((await request(`/finance/invoices/${invoiceId}/reopen`, financeToken, 'POST')).status, 200)
+    assert.equal((await request(`/finance/invoices/${invoiceId}/finalize`, financeToken, 'POST')).status, 409)
+    assert.equal((await request(`/finance/clients/${clientId}`, financeToken, 'PATCH', { active: true })).status, 200)
     assert.equal((await request(`/finance/invoices/${invoiceId}/ready`, financeToken, 'POST')).status, 200)
     const concurrentFinalize = await Promise.all([request(`/finance/invoices/${invoiceId}/finalize`, financeToken, 'POST'), request(`/finance/invoices/${invoiceId}/finalize`, financeToken, 'POST')]); assert.deepEqual(concurrentFinalize.map(result => result.status).sort(), [200, 409])
     const audit = await request('/finance/audit', financeToken); assert.ok(audit.data.events.some((event: any) => event.action === 'invoice_finalized' && Number(event.entityId) === Number(invoiceId)))
-    const effectiveTomorrow = new Date(); effectiveTomorrow.setUTCDate(effectiveTomorrow.getUTCDate() + 1)
-    const rateVersion = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 300, currency: 'USD', effectiveFrom: effectiveTomorrow.toISOString().slice(0, 10) }); assert.equal(rateVersion.status, 201, JSON.stringify(rateVersion.data))
+    assert.ok(audit.data.events.some((event: any) => event.action === 'invoice_returned_to_draft' && Number(event.entityId) === Number(invoiceId)))
+    const retroactiveRate = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 300, currency: 'USD', effectiveFrom: period.startsOn })
+    assert.equal(retroactiveRate.status, 409, 'A retroactive rate cannot replace the rate on finalized work.')
+    const snapshotWork = await request(`/finance/entries?period=${encodeURIComponent(period.label)}`, financeToken)
+    const billedEntry = snapshotWork.data.entries.find((item: any) => Number(item.entryId) === entryId)
+    assert.equal(Number(billedEntry.rateAmount), 125); assert.equal(Number(billedEntry.hours), 4); assert.equal(Number(billedEntry.amount), 500)
+    assert.equal(billedEntry.amountKind, 'billed'); assert.equal(billedEntry.amountCurrency, 'USD')
+    const filteredWorkExport = await request(`/finance/exports/approved-work?period=${encodeURIComponent(period.label)}&billable=billable&billingStatus=finalized`, financeToken)
+    const filteredWorkRows = csvRows(filteredWorkExport.data.raw)
+    assert.equal(filteredWorkRows.length, 2); assert.equal(filteredWorkRows[1]?.[0], String(entryId)); assert.equal(filteredWorkRows[1]?.[14], '500'); assert.equal(filteredWorkRows[1]?.[15], 'billed')
+    await db.query('UPDATE project_billing_rates SET amount = 300 WHERE id = ?', [oldRateId])
+    try {
+      const legacyWork = await request(`/finance/entries?period=${encodeURIComponent(period.label)}`, financeToken)
+      const legacyBilled = legacyWork.data.entries.find((item: any) => Number(item.entryId) === entryId)
+      assert.equal(Number(legacyBilled.rateAmount), 125); assert.equal(Number(legacyBilled.amount), 500, 'Finalized work must use its snapshot even if a historical rate was changed outside the API.')
+      const legacyCsv = await request(`/finance/exports/approved-work?period=${encodeURIComponent(period.label)}&billingStatus=finalized`, financeToken)
+      assert.equal(csvRows(legacyCsv.data.raw)[1]?.[14], '500')
+    } finally { await db.query('UPDATE project_billing_rates SET amount = 125 WHERE id = ?', [oldRateId]) }
+    const finalizedInvoiceExport = await request(`/finance/exports/invoices?status=finalized&period=${encodeURIComponent(period.label)}&clientId=${clientId}`, financeToken)
+    assert.equal(csvRows(finalizedInvoiceExport.data.raw).length, 2)
+    const finalizedLineExport = await request(`/finance/exports/invoice-lines?invoiceId=${invoiceId}&status=finalized`, financeToken)
+    assert.equal(csvRows(finalizedLineExport.data.raw).length, 2)
+    assert.equal((await request(`/finance/rates/${oldRateId}/active`, financeToken, 'PATCH', { active: false })).status, 409, 'Ending a rate must preserve coverage for finalized work.')
+    const effectiveFuture = new Date(new Date(`${period.startsOn}T00:00:00Z`).getTime() + 3 * 86400000).toISOString().slice(0, 10)
+    const beforeFutureRate = new Date(new Date(`${period.startsOn}T00:00:00Z`).getTime() + 2 * 86400000).toISOString().slice(0, 10)
+    const rateVersion = await request(`/finance/projects/${projectId}/rates`, financeToken, 'POST', { amount: 300, currency: 'USD', effectiveFrom: effectiveFuture }); assert.equal(rateVersion.status, 201, JSON.stringify(rateVersion.data))
+    const [sameDayPending] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [timesheetId, beforeFutureRate, projectId, activityId, 0.25, 'Work before future rate starts'])
+    const pendingAfterFutureRate = await request(`/finance/entries?period=${encodeURIComponent(period.label)}`, financeToken)
+    const pendingEntry = pendingAfterFutureRate.data.entries.find((item: any) => Number(item.entryId) === sameDayPending.insertId)
+    assert.equal(Number(pendingEntry.rateAmount), 125); assert.equal(Number(pendingEntry.amount), 31.25, 'An inactive bounded rate still covers work through its effective-to date.')
     const overlappingActivation = await request(`/finance/rates/${oldRateId}/active`, financeToken, 'PATCH', { active: true }); assert.equal(overlappingActivation.status, 409, JSON.stringify(overlappingActivation.data))
     const [[oldRate]] = await db.query<any[]>("SELECT active, DATE_FORMAT(effective_to, '%Y-%m-%d') AS effectiveTo FROM project_billing_rates WHERE id = ?", [oldRateId]); assert.equal(Number(oldRate.active), 0); assert.ok(oldRate.effectiveTo)
     const historical = await request(`/finance/invoices/${invoiceId}`, financeToken); assert.equal(Number(historical.data.lines[0].rate), 125); assert.equal(Number(historical.data.lines[0].amount), 500); assert.equal(Number(historical.data.invoice.subtotal), 500)
+    const workAfterRateChange = await request(`/finance/entries?period=${encodeURIComponent(period.label)}`, financeToken)
+    const historicalWork = workAfterRateChange.data.entries.find((item: any) => Number(item.entryId) === entryId)
+    assert.equal(Number(historicalWork.rateAmount), 125); assert.equal(Number(historicalWork.amount), 500)
     const directorReport = await request('/director/financial-report', directorToken); assert.equal(directorReport.status, 200); assert.ok(directorReport.data.invoices.some((row: any) => row.currency === 'USD' && Number(row.amount) === 500)); assert.ok(directorReport.data.hours.some((row: any) => row.currency === 'USD' && Number(row.billed) === 4))
     const tinyRate = await request(`/finance/projects/${noRateProjectId}/rates`, financeToken, 'POST', { amount: 0.02, currency: 'USD', effectiveFrom: period.startsOn }); assert.equal(tinyRate.status, 201, JSON.stringify(tinyRate.data))
     await db.query('UPDATE timesheet_entries SET hours = 0.25 WHERE id = ?', [noRateEntryId])

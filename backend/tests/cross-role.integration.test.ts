@@ -8,17 +8,21 @@ import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { createTestPeriod } from './testPeriod.js'
+import { isolatedIntegrationDatabaseName } from './integrationDatabase.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
 
 test('HR, Manager, Employee, Finance, and Director share one authorized workflow', { skip: !enabled }, async () => {
   const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Set ${key} in backend/.env to run cross-role integration tests.`); return value }
-  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
+  const testDatabaseName = isolatedIntegrationDatabaseName()
+  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: testDatabaseName, dateStrings: true })
+  const [[databaseIdentity]] = await db.query<any[]>('SELECT DATABASE() AS name')
+  assert.equal(databaseIdentity.name, testDatabaseName, 'Cross-role integration tests must use the explicitly isolated database.')
   let testPeriodId = 0
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`; const integrationJwtSecret = 'integration-test-secret-that-is-at-least-32-characters-long'; const password = `CrossRole-${suffix}-Pass!`
   const emails = { hr: `hr-${suffix}@pulseai.integration`, manager: `manager-${suffix}@pulseai.integration`, newManager: `new-manager-${suffix}@pulseai.integration`, employee: `employee-${suffix}@pulseai.integration`, finance: `finance-${suffix}@pulseai.integration`, director: `director-${suffix}@pulseai.integration` }
-  let server: ChildProcess | undefined; let port = 0; let departmentId = 0; let hrId = 0; let managerId = 0; let newManagerId = 0; let financeId = 0; let directorId = 0; let unlistedDirectorId = 0; let unlistedHRId = 0; let unlistedFinanceId = 0; let inactiveEmployeeId = 0; let employeeId = 0; let employeeUserId = 0; let projectId = 0; let activityId = 0; let clientId = 0; let timesheetId = 0; let entryId = 0; let leaveId = 0; let holidayId = 0; let invoiceId = 0; let departmentSubmissionId = 0; let offboardNoticeId = 0; let employeeVersion = 1; let serverOutput = ''
+  let server: ChildProcess | undefined; let port = 0; let departmentId = 0; let hrId = 0; let managerId = 0; let newManagerId = 0; let financeId = 0; let directorId = 0; let unlistedDirectorId = 0; let unlistedHRId = 0; let unlistedFinanceId = 0; let inactiveEmployeeId = 0; let employeeId = 0; let employeeUserId = 0; let projectId = 0; let activityId = 0; let clientId = 0; let timesheetId = 0; let entryId = 0; let leaveId = 0; let holidayId = 0; let invoiceId = 0; let departmentSubmissionId = 0; let directorNotificationId = 0; let offboardNoticeId = 0; let employeeVersion = 1; let serverOutput = ''
   const request = async (path: string, authToken: string, method = 'GET', body?: object) => {
     const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
     const text = await response.text(); let data: any = {}; try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }; return { status: response.status, data }
@@ -32,7 +36,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     port = (listener.address() as any).port; await new Promise<void>(resolveClose => listener.close(() => resolveClose()))
     const hash = await bcrypt.hash(password, 6)
     const createUser = async (name: string, email: string, role: string) => { const [result] = await db.query<mysql.ResultSetHeader>('INSERT INTO users (name,email,password_hash,role,auth_provider) VALUES (?,?,?,?,?)', [name,email,hash,role,'password']); return result.insertId }
-    hrId = await createUser('HR integration', emails.hr, 'hr'); managerId = await createUser('Manager integration', emails.manager, 'manager'); newManagerId = await createUser('New Manager integration', emails.newManager, 'manager'); financeId = await createUser('Finance integration', emails.finance, 'finance'); directorId = await createUser('Director integration', emails.director, 'director')
+    hrId = await createUser('HR integration', emails.hr, 'hr'); managerId = await createUser('Manager integration', emails.manager, 'manager'); newManagerId = await createUser('Manager integration', emails.newManager, 'manager'); financeId = await createUser('Finance integration', emails.finance, 'finance'); directorId = await createUser('Director integration', emails.director, 'director')
     const unlistedEmail = `unlisted-director-${suffix}@pulseai.integration`
     unlistedDirectorId = await createUser('Unlisted Director integration', unlistedEmail, 'director'); const unlistedHREmail=`unlisted-hr-${suffix}@pulseai.integration`; const unlistedFinanceEmail=`unlisted-finance-${suffix}@pulseai.integration`; unlistedHRId=await createUser('Unlisted HR integration',unlistedHREmail,'hr'); unlistedFinanceId=await createUser('Unlisted Finance integration',unlistedFinanceEmail,'finance')
     const [inactive] = await db.query<mysql.ResultSetHeader>('INSERT INTO employees (employee_code,name,email,department_id,manager_name,active) VALUES (?,?,?,?,?,FALSE)', [`XI-${suffix}`,'Inactive integration employee',`inactive-${suffix}@pulseai.integration`,departmentId,'Manager integration']); inactiveEmployeeId = inactive.insertId
@@ -41,7 +45,47 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/docs`)).status,404,'Production API docs are hidden unless explicitly enabled.')
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/openapi.json`)).status,404,'Production OpenAPI is hidden unless explicitly enabled.')
 
-    const hr = await login(emails.hr,'hr'); const manager = await login(emails.manager,'manager'); const newManager = await login(emails.newManager,'manager'); const finance = await login(emails.finance,'finance'); const director = await login(emails.director,'director')
+    const hr = await login(emails.hr,'hr'); const manager = await login(emails.manager,'manager'); const newManager = await login(emails.newManager,'manager'); const finance = await login(emails.finance,'finance'); const director = await login(emails.director,'director'); const unlistedDirector = jwt.sign({ id: unlistedDirectorId, email: unlistedEmail, role: 'director' }, integrationJwtSecret)
+    const [directorNotice] = await db.query<mysql.ResultSetHeader>('INSERT INTO notifications (title,message,notification_type,recipient_email) VALUES (?,?,?,?)',['Director workflow notice',`Director notification ${suffix}`,'info',emails.director])
+    directorNotificationId = directorNotice.insertId
+    assert.ok([401, 403].includes((await request(`/director/notifications/${directorNotificationId}/read`,unlistedDirector,'POST')).status),'Unapproved or unauthorized Directors cannot mark another Director’s notification as read.')
+    assert.equal((await request(`/director/notifications/${directorNotificationId}/read`,director,'POST')).status,200)
+    const [[directorReadState]] = await db.query<any[]>('SELECT read_at AS readAt FROM notifications WHERE id=? AND recipient_email=?',[directorNotificationId,emails.director]); assert.ok(directorReadState.readAt,'Director notification read state persists in MySQL.')
+    const futureStart = new Date(`${period.endsOn}T00:00:00Z`); futureStart.setUTCDate(futureStart.getUTCDate() + 35)
+    const futureEnd = new Date(futureStart); futureEnd.setUTCDate(futureEnd.getUTCDate() + 6)
+    const futureDates = { startsOn: futureStart.toISOString().slice(0,10), endsOn: futureEnd.toISOString().slice(0,10), submissionDeadline: futureEnd.toISOString().slice(0,10) }
+    const futureLabel = `Future ${suffix}`; const correctedLabel = `Corrected ${suffix}`
+    assert.equal((await request(`/hr/reporting-periods/${period.id}/close`,hr,'POST')).status,409,'Current period cannot be closed.')
+    const createdPeriod = await request('/hr/reporting-periods',hr,'POST',{ label:futureLabel,...futureDates,standardDailyHours:8 }); assert.equal(createdPeriod.status,201,JSON.stringify(createdPeriod.data))
+    const futureId = Number(createdPeriod.data.reportingPeriodId)
+    try {
+      assert.equal((await request(`/hr/reporting-periods/${futureId}`,manager,'PATCH',{label:correctedLabel,...futureDates,standardDailyHours:7.5})).status,403)
+      assert.equal((await request(`/hr/reporting-periods/${futureId}`,hr,'PATCH',{label:correctedLabel,...futureDates,standardDailyHours:7.3})).status,400)
+      const correction = await request(`/hr/reporting-periods/${futureId}`,hr,'PATCH',{label:correctedLabel,...futureDates,standardDailyHours:7.5}); assert.equal(correction.status,200,JSON.stringify(correction.data))
+      const [[cycle]]=await db.query<any[]>('SELECT label,standard_daily_hours AS hours FROM reporting_periods WHERE id=?',[futureId]); assert.equal(cycle.label,correctedLabel); assert.equal(Number(cycle.hours),7.5)
+      const [[billing]]=await db.query<any[]>('SELECT period_label AS label,DATE_FORMAT(starts_on,\'%Y-%m-%d\') AS startsOn FROM billing_cycles WHERE period_label=?',[correctedLabel]); assert.equal(billing.label,correctedLabel); assert.equal(billing.startsOn,futureDates.startsOn)
+      assert.equal((await request('/hr/reporting-periods',hr,'POST',{label:`Overlap ${suffix}`,...futureDates,standardDailyHours:8})).status,409)
+      const listed = await request(`/hr/reporting-periods?search=${encodeURIComponent(correctedLabel)}&pageSize=1`,hr); assert.equal(listed.status,200); assert.equal(listed.data.total,1); assert.equal(Number(listed.data.rows[0].id),futureId)
+      assert.equal((await request('/hr/reporting-periods?pageSize=51',hr)).status,400)
+      const [used]=await db.query<mysql.ResultSetHeader>("INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,0,'draft')",[inactiveEmployeeId,futureId,correctedLabel])
+      try { const denied=await request(`/hr/reporting-periods/${futureId}`,hr,'PATCH',{label:`Unsafe ${suffix}`,...futureDates,standardDailyHours:8}); assert.equal(denied.status,409); assert.match(denied.data.message,/timesheets/); assert.equal((await request(`/hr/reporting-periods/${futureId}/close`,hr,'POST')).status,409) } finally { await db.query('DELETE FROM timesheets WHERE id=?',[used.insertId]) }
+      assert.equal((await request(`/hr/reporting-periods/${futureId}/close`,manager,'POST')).status,403)
+      const closed=await request(`/hr/reporting-periods/${futureId}/close`,hr,'POST'); assert.equal(closed.status,200,JSON.stringify(closed.data))
+      assert.equal((await request(`/hr/reporting-periods/${futureId}/close`,hr,'POST')).status,409)
+      assert.equal((await request(`/hr/reporting-periods/${futureId}`,hr,'PATCH',{label:`Unsafe ${suffix}`,...futureDates,standardDailyHours:8})).status,409)
+      const closedList=await request(`/hr/reporting-periods?status=closed&search=${encodeURIComponent(correctedLabel)}`,hr); assert.equal(closedList.data.total,1)
+      assert.ok(!(await request('/manager/periods',manager)).data.periods.some((row:any)=>row.periodLabel===correctedLabel))
+      assert.ok(!(await request('/finance/periods',finance)).data.periods.some((row:any)=>row.periodLabel===correctedLabel))
+      const [[preserved]]=await db.query<any[]>('SELECT COUNT(*) AS count FROM billing_cycles WHERE period_label=?',[correctedLabel]); assert.equal(Number(preserved.count),1)
+      const [[audit]]=await db.query<any[]>("SELECT COUNT(*) AS count FROM audit_events WHERE entity_type='reporting_period' AND entity_id=? AND action='Reporting period corrected'",[futureId]); assert.equal(Number(audit.count),1)
+      const [[closureAudit]]=await db.query<any[]>("SELECT COUNT(*) AS count FROM audit_events WHERE entity_type='reporting_period' AND entity_id=? AND action='Reporting period closed'",[futureId]); assert.equal(Number(closureAudit.count),1)
+      const concurrent = await Promise.all([request('/hr/reporting-periods',hr,'POST',{label:`Concurrent A ${suffix}`,...futureDates,standardDailyHours:8}),request('/hr/reporting-periods',hr,'POST',{label:`Concurrent B ${suffix}`,...futureDates,standardDailyHours:8})]); assert.deepEqual(concurrent.map(result=>result.status).sort(),[201,409],'Concurrent period creation cannot produce overlapping active periods.')
+      const winner=concurrent.find(result=>result.status===201)!; const winnerLabel=concurrent[0]===winner?`Concurrent A ${suffix}`:`Concurrent B ${suffix}`
+      await db.query('DELETE FROM billing_cycles WHERE period_label=?',[winnerLabel]); await db.query('DELETE FROM reporting_periods WHERE id=?',[Number(winner.data.reportingPeriodId)])
+    } finally { await db.query('DELETE FROM billing_cycles WHERE period_label=?',[correctedLabel]); await db.query('DELETE FROM reporting_periods WHERE id=?',[futureId]) }
+    const hrManagerOptions = await request('/hr/overview', hr)
+    const duplicateNameOptions = hrManagerOptions.data.managers.filter((item: any) => item.name === 'Manager integration')
+    assert.deepEqual(duplicateNameOptions.map((item: any) => item.email).sort(), [emails.manager, emails.newManager].sort(), 'Same-name Manager choices remain distinguishable by their unique email addresses.')
     const deniedLogin = await fetch(`http://127.0.0.1:${port}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:unlistedEmail,password,role:'director'}) }); assert.equal(deniedLogin.status,403,'Unlisted Director must not receive a new token.')
     const oldToken = jwt.sign({sub:unlistedDirectorId,role:'director',email:unlistedEmail},integrationJwtSecret)
     assert.equal((await request('/director/dashboard',oldToken)).status,403,'Previously issued token for unlisted Director must be denied.')
@@ -54,8 +98,12 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     assert.equal(Number(blankReportDepartment.approved),0); assert.equal(Number(blankReportDepartment.submitted),0); assert.equal(Number(blankReportDepartment.pending),0)
     const blankDrilldown = await request(`/director/departments/${departmentId}`,director); assert.equal(blankDrilldown.data.employees.length,0,'Inactive employee must not appear in department drill-down.')
     const added = await request('/hr/employees', hr, 'POST', { employeeCode:`XR-${suffix}`, name:'Cross-role employee', email:emails.employee, departmentId, managerUserId:managerId }); assert.equal(added.status,201,JSON.stringify(added.data)); employeeId = Number(added.data.employeeId); const activationCode = String(added.data.activationCode); assert.ok(activationCode)
+    const rosterPage1=await request('/hr/employees?pageSize=1&page=1',hr); const rosterPage2=await request('/hr/employees?pageSize=1&page=2',hr)
+    assert.equal(rosterPage1.status,200); assert.equal(rosterPage2.status,200); assert.ok(rosterPage1.data.total>=2); assert.equal(rosterPage1.data.rows.length,1); assert.equal(rosterPage2.data.rows.length,1); assert.notEqual(rosterPage1.data.rows[0].id,rosterPage2.data.rows[0].id)
+    const employeeOptions=await request(`/hr/employee-options?search=${encodeURIComponent(emails.employee)}`,hr); assert.ok(employeeOptions.data.rows.some((row:any)=>Number(row.id)===employeeId))
     await db.query('UPDATE employees SET region = ? WHERE id = ?', [`test-${suffix}`, employeeId])
     assert.equal((await request('/hr/overview', manager)).status,403,'Manager cannot access HR API.')
+    for (const path of ['/hr/employees','/hr/employee-options','/hr/leave','/hr/holidays','/hr/reporting-periods']) assert.equal((await request(path,manager)).status,403,`Manager must not access ${path}.`)
     const register = async (code?: string) => { const response = await fetch(`http://127.0.0.1:${port}/api/auth/register`, { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Cross-role employee',email:emails.employee,password,activationCode:code,role:'employee'}) }); return { status:response.status, data:await response.json() as any } }
     assert.equal((await register()).status,400,'Registration needs an activation code.')
     assert.equal((await register('incorrect-code')).status,403,'Wrong code is rejected.')
@@ -83,6 +131,8 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     assert.equal((await request(`/employee/timesheet/entries/${entryId}`,employee,'PUT',{entryDate,projectId,activityId,hours:6,workDescription:'Forbidden while submitted'})).status,409)
 
     assert.equal((await request(`/hr/employees/${employeeId}`,hr,'PATCH',{managerUserId:newManagerId,version:employeeVersion++})).status,200)
+    assert.equal((await request('/manager/team', manager)).data.team.some((row: any) => Number(row.id) === employeeId), false, 'Reporting-line changes update the current Manager team.')
+    assert.equal((await request('/manager/team', newManager)).data.team.some((row: any) => Number(row.id) === employeeId), true, 'The selected Manager account receives the Employee.')
     assert.equal((await request(`/manager/timesheets/${timesheetId}`,manager)).status,200,'A reporting-line change does not silently reassign the pending review.')
     assert.equal((await request(`/manager/timesheets/${timesheetId}`,newManager)).status,404)
     const reassigned = await request(`/hr/employees/${employeeId}`,hr,'PATCH',{managerUserId:newManagerId,reassignPendingReviews:true,version:employeeVersion++}); assert.equal(reassigned.status,200,JSON.stringify(reassigned.data)); assert.equal(Number(reassigned.data.pendingReviewsReassigned),1,JSON.stringify(reassigned.data))
@@ -97,6 +147,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     assert.equal((await request(`/manager/timesheets/${timesheetId}`,manager)).status,404,'Resubmission remains with the explicitly assigned reviewer.')
     const secondReview = await request(`/manager/timesheets/${timesheetId}`,newManager); assert.equal(secondReview.data.timesheet.status,'resubmitted')
     const approval = await request(`/manager/timesheets/${timesheetId}/approve`,newManager,'POST',{version:secondReview.data.timesheet.version}); assert.equal(approval.status,200,JSON.stringify({ response:approval.data, review:secondReview.data }))
+    const [financeNotices] = await db.query<any[]>('SELECT title FROM notifications WHERE recipient_email = ? AND timesheet_id = ?', [emails.finance, timesheetId]); assert.ok(financeNotices.some((row: any) => row.title === 'Approved work ready for Finance review'), 'Manager approval sends the corrected Finance review notification title.')
     assert.equal((await request(`/employee/timesheet/entries/${entryId}`,employee,'PUT',{entryDate,projectId,activityId,hours:2,workDescription:'Approved entry is read-only'})).status,409)
     assert.equal((await request('/finance/entries',director)).status,403)
     const client = await request('/finance/clients',finance,'POST',{code:`XC-${suffix}`,name:'Cross-role billing client',currency:'USD'}); assert.equal(client.status,201,JSON.stringify(client.data)); clientId=Number(client.data.clientId)
@@ -119,7 +170,10 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     assert.equal((await request(`/director/approvals/${departmentSubmissionId}/approve`,director,'POST')).status,200)
     const [[timesheetState]]=await db.query<any[]>('SELECT status FROM timesheets WHERE id=?',[timesheetId]); assert.equal(timesheetState.status,'approved','Director department-cycle review must not change Manager-owned timesheet decisions.')
     const [sharedAudit]=await db.query<any[]>('SELECT action,actor_role FROM audit_events WHERE (entity_type=? AND entity_id=?) OR (entity_type=? AND entity_id=?) ORDER BY id',['timesheet',timesheetId,'invoice',invoiceId]); assert.ok(sharedAudit.some((row:any)=>row.actor_role==='employee'&&row.action==='Timesheet submitted')); assert.ok(sharedAudit.some((row:any)=>row.actor_role==='manager'&&row.action==='Timesheet approved')); assert.ok(sharedAudit.some((row:any)=>row.actor_role==='finance'&&row.action==='invoice_finalized'))
-    const hrOverview=await request('/hr/overview',hr); assert.ok(hrOverview.data.employees.some((row:any)=>Number(row.id)===employeeId)); assert.ok(hrOverview.data.leaves.some((row:any)=>Number(row.id)===leaveId)); assert.ok(hrOverview.data.holidays.some((row:any)=>Number(row.id)===holidayId))
+    const hrOverview=await request('/hr/overview',hr); assert.equal(hrOverview.status,200); assert.equal(hrOverview.data.employees,undefined,'Overview no longer loads the full roster.')
+    assert.ok((await request(`/hr/employees?search=${encodeURIComponent(emails.employee)}`,hr)).data.rows.some((row:any)=>Number(row.id)===employeeId))
+    assert.ok((await request('/hr/leave?search=Cross-role',hr)).data.rows.some((row:any)=>Number(row.id)===leaveId))
+    assert.ok((await request('/hr/holidays?search=Cross-role',hr)).data.rows.some((row:any)=>Number(row.id)===holidayId))
     assert.equal((await request('/hr/overview',finance)).status,403)
     assert.equal((await request(`/hr/employees/${employeeId}`,hr,'PATCH',{active:false,version:employeeVersion++})).status,200)
     const [notice] = await db.query<mysql.ResultSetHeader>('INSERT INTO notifications (title,message,notification_type,recipient_email) VALUES (?,?,?,?)',['Offboard probe','Check revoked token','info',emails.employee]); offboardNoticeId=notice.insertId
@@ -137,6 +191,7 @@ test('HR, Manager, Employee, Finance, and Director share one authorized workflow
     if (clientId) await db.query('DELETE FROM clients WHERE id=?',[clientId]).catch(()=>undefined)
     if (leaveId) { await db.query('DELETE FROM audit_events WHERE entity_type=\'leave\' AND entity_id=?',[leaveId]).catch(()=>undefined); await db.query('DELETE FROM employee_leave_records WHERE id=?',[leaveId]).catch(()=>undefined) }
     if (offboardNoticeId) await db.query('DELETE FROM notifications WHERE id=?',[offboardNoticeId]).catch(()=>undefined)
+    if (typeof directorNotificationId !== 'undefined') await db.query('DELETE FROM notifications WHERE id=?',[directorNotificationId]).catch(()=>undefined)
     if (holidayId) { await db.query('DELETE FROM audit_events WHERE entity_type=\'holiday\' AND entity_id=?',[holidayId]).catch(()=>undefined); await db.query('DELETE FROM public_holidays WHERE id=?',[holidayId]).catch(()=>undefined) }
     if (employeeId) { await db.query('DELETE FROM audit_events WHERE entity_type=\'employee\' AND entity_id=?',[employeeId]).catch(()=>undefined); await db.query('DELETE FROM employees WHERE id=?',[employeeId]).catch(()=>undefined) }
     if (inactiveEmployeeId) await db.query('DELETE FROM employees WHERE id=?',[inactiveEmployeeId]).catch(()=>undefined)

@@ -483,6 +483,7 @@ async function initializeDatabase() {
   await pool.query("UPDATE timesheets t JOIN employees e ON e.id = t.employee_id SET t.assigned_manager_user_id = e.manager_user_id WHERE t.assigned_manager_user_id IS NULL AND e.manager_user_id IS NOT NULL AND t.status IN ('submitted','resubmitted','approved','returned')").catch(ignoreKnownMigrationError)
   await seedHRAccounts()
   await seedFinanceAccounts()
+  await pool.query("INSERT IGNORE INTO activities (name, category, active) VALUES ('Training', 'internal', TRUE), ('Internal meeting', 'internal', TRUE)")
   if (process.env.SEED_DEMO_DATA === 'true') {
     console.warn('WARNING: SEED_DEMO_DATA=true; startup will create or synchronize demonstration accounts and records in this database.')
     await seedDemoRoleAccounts()
@@ -835,21 +836,91 @@ app.get('/api/hr/overview', requireHR, async (_req: AuthenticatedRequest, res, n
   try {
     const [[summary]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS employees, SUM(active = TRUE) AS activeEmployees,
       SUM(active = FALSE) AS inactiveEmployees FROM employees`)
-    const [employees] = await pool.query<RowDataPacket[]>(`SELECT e.id, e.employee_code AS employeeCode, e.name, e.email, e.region, e.active,
-      e.manager_user_id AS managerUserId, e.manager_name AS managerName, d.id AS departmentId, d.name AS department,
-       e.version, e.user_id AS userId,
-       (SELECT COUNT(*) FROM employee_leave_records l WHERE l.employee_id = e.id AND l.status = 'approved' AND l.ends_on >= ?) AS upcomingLeaveCount,
-      (SELECT COUNT(*) FROM timesheets t WHERE t.employee_id = e.id AND t.status IN ('submitted','resubmitted','returned')) AS pendingReviewCount,
-      (SELECT COUNT(*) FROM timesheets t WHERE t.employee_id = e.id AND t.status IN ('submitted','resubmitted','returned') AND t.assigned_manager_user_id IS NOT NULL AND t.assigned_manager_user_id <> e.manager_user_id) AS pendingReassignmentCount
-       FROM employees e JOIN departments d ON d.id = e.department_id ORDER BY e.active DESC, e.name`, [businessDate()])
     const [departments] = await pool.query<RowDataPacket[]>('SELECT id, code, name FROM departments ORDER BY name')
     const [managers] = await pool.query<RowDataPacket[]>("SELECT id, name, email FROM users WHERE role = 'manager' ORDER BY name")
-    const [leaves] = await pool.query<RowDataPacket[]>(`SELECT l.id, l.employee_id AS employeeId, e.name AS employeeName, e.employee_code AS employeeCode,
-      DATE_FORMAT(l.starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(l.ends_on, '%Y-%m-%d') AS endsOn, l.leave_type AS leaveType, l.status, l.source_reference AS sourceReference
-      FROM employee_leave_records l JOIN employees e ON e.id = l.employee_id ORDER BY l.starts_on DESC LIMIT 200`)
-    const [holidays] = await pool.query<RowDataPacket[]>("SELECT id, DATE_FORMAT(holiday_date, '%Y-%m-%d') AS holidayDate, name, region, active FROM public_holidays ORDER BY holiday_date DESC LIMIT 200")
-    const [reportingPeriods] = await pool.query<RowDataPacket[]>("SELECT id,label,DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn,DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn,DATE_FORMAT(submission_deadline, '%Y-%m-%d') AS submissionDeadline,standard_daily_hours AS standardDailyHours,active FROM reporting_periods ORDER BY starts_on DESC LIMIT 24")
-    return res.json({ summary: summary || {}, employees, departments, managers, leaves, holidays, reportingPeriods, businessDate: businessDate(), activeReportingPeriod: await activeReportingPeriod(pool) })
+    return res.json({ summary: summary || {}, departments, managers, businessDate: businessDate(), activeReportingPeriod: await activeReportingPeriod(pool) })
+  } catch (error) { next(error) }
+})
+
+function hrHistoryQuery(req: AuthenticatedRequest) {
+  const page = Number(req.query.page || 1)
+  const pageSize = Number(req.query.pageSize || 20)
+  const search = String(req.query.search || '').trim().slice(0, 120)
+  if (!Number.isInteger(page) || page < 1 || page > 100000 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) return null
+  return { page, pageSize, offset: (page - 1) * pageSize, search }
+}
+
+app.get('/api/hr/employees', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const query = hrHistoryQuery(req); if (!query) return res.status(400).json({ message: 'Choose a valid page and page size (1–50).' })
+    const status = String(req.query.status || 'all'); const departmentId = String(req.query.departmentId || '')
+    if (!['all', 'active', 'inactive'].includes(status) || (departmentId && !/^\d+$/.test(departmentId))) return res.status(400).json({ message: 'Choose valid employee filters.' })
+    const where = `FROM employees e JOIN departments d ON d.id = e.department_id WHERE (? = '' OR e.name LIKE ? OR e.employee_code LIKE ? OR e.email LIKE ?) AND (? = 'all' OR e.active = (? = 'active')) AND (? = '' OR e.department_id = ?)`
+    const term = `%${query.search}%`; const args = [query.search, term, term, term, status, status, departmentId, departmentId]
+    const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${where}`, args)
+    const [rows] = await pool.query<RowDataPacket[]>(`SELECT e.id, e.employee_code AS employeeCode, e.name, e.email, e.region, e.active,
+      e.manager_user_id AS managerUserId, e.manager_name AS managerName, d.id AS departmentId, d.name AS department,
+      e.version, e.user_id AS userId,
+      (SELECT COUNT(*) FROM employee_leave_records l WHERE l.employee_id = e.id AND l.status = 'approved' AND l.ends_on >= ?) AS upcomingLeaveCount,
+      (SELECT COUNT(*) FROM timesheets t WHERE t.employee_id = e.id AND t.status IN ('submitted','resubmitted','returned')) AS pendingReviewCount,
+      (SELECT COUNT(*) FROM timesheets t WHERE t.employee_id = e.id AND t.status IN ('submitted','resubmitted','returned')) AS pendingReassignmentCount
+      ${where} ORDER BY e.active DESC, e.name, e.id LIMIT ? OFFSET ?`, [businessDate(), ...args, query.pageSize, query.offset])
+    return res.json({ rows, total: Number(count?.total || 0), page: query.page, pageSize: query.pageSize })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/hr/employee-options', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const search = String(req.query.search || '').trim().slice(0, 120)
+    const term = `%${search}%`
+    const [rows] = await pool.query<RowDataPacket[]>(`SELECT id,name,employee_code AS employeeCode FROM employees
+      WHERE active = TRUE AND (? = '' OR name LIKE ? OR employee_code LIKE ? OR email LIKE ?)
+      ORDER BY name,id LIMIT 20`, [search, term, term, term])
+    return res.json({ rows })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/hr/leave', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const query = hrHistoryQuery(req); if (!query) return res.status(400).json({ message: 'Choose a valid page and page size (1–50).' })
+    const status = String(req.query.status || 'all'); if (!['all','approved','cancelled'].includes(status)) return res.status(400).json({ message: 'Choose a valid leave status.' })
+    const where = `FROM employee_leave_records l JOIN employees e ON e.id = l.employee_id WHERE (? = '' OR e.name LIKE ? OR e.employee_code LIKE ? OR l.leave_type LIKE ?) AND (? = 'all' OR l.status = ?)`
+    const term = `%${query.search}%`; const args = [query.search,term,term,term,status,status]
+    const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${where}`, args)
+    const [rows] = await pool.query<RowDataPacket[]>(`SELECT l.id,l.employee_id AS employeeId,e.name AS employeeName,e.employee_code AS employeeCode,
+      DATE_FORMAT(l.starts_on,'%Y-%m-%d') AS startsOn,DATE_FORMAT(l.ends_on,'%Y-%m-%d') AS endsOn,l.leave_type AS leaveType,l.status,l.source_reference AS sourceReference
+      ${where} ORDER BY l.starts_on DESC,l.id DESC LIMIT ? OFFSET ?`, [...args,query.pageSize,query.offset])
+    return res.json({ rows,total:Number(count?.total || 0),page:query.page,pageSize:query.pageSize })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/hr/holidays', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const query = hrHistoryQuery(req); if (!query) return res.status(400).json({ message: 'Choose a valid page and page size (1–50).' })
+    const status = String(req.query.status || 'all'); if (!['all','active','inactive'].includes(status)) return res.status(400).json({ message: 'Choose a valid holiday status.' })
+    const where = `FROM public_holidays WHERE (? = '' OR name LIKE ? OR region LIKE ?) AND (? = 'all' OR active = (? = 'active'))`
+    const term = `%${query.search}%`; const args = [query.search,term,term,status,status]
+    const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${where}`, args)
+    const [rows] = await pool.query<RowDataPacket[]>(`SELECT id,DATE_FORMAT(holiday_date,'%Y-%m-%d') AS holidayDate,name,region,active ${where} ORDER BY holiday_date DESC,id DESC LIMIT ? OFFSET ?`, [...args,query.pageSize,query.offset])
+    return res.json({ rows,total:Number(count?.total || 0),page:query.page,pageSize:query.pageSize })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/hr/reporting-periods', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const query = hrHistoryQuery(req); if (!query) return res.status(400).json({ message: 'Choose a valid page and page size (1–50).' })
+    const status = String(req.query.status || 'all'); if (!['all','active','closed'].includes(status)) return res.status(400).json({ message: 'Choose a valid reporting-period status.' })
+    const where = `FROM reporting_periods p WHERE (? = '' OR p.label LIKE ?) AND (? = 'all' OR p.active = (? = 'active'))`
+    const term = `%${query.search}%`; const args = [query.search,term,status,status]
+    const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${where}`, args)
+    const [rows] = await pool.query<RowDataPacket[]>(`SELECT p.id,p.label,DATE_FORMAT(p.starts_on,'%Y-%m-%d') AS startsOn,DATE_FORMAT(p.ends_on,'%Y-%m-%d') AS endsOn,
+      DATE_FORMAT(p.submission_deadline,'%Y-%m-%d') AS submissionDeadline,p.standard_daily_hours AS standardDailyHours,p.active,
+      (EXISTS(SELECT 1 FROM timesheets t WHERE t.reporting_period_id=p.id OR t.period_label=p.label)
+       OR EXISTS(SELECT 1 FROM department_submissions s WHERE s.period_label=p.label)
+       OR EXISTS(SELECT 1 FROM invoices i WHERE i.period_label=p.label)
+       OR NOT EXISTS(SELECT 1 FROM billing_cycles b WHERE b.period_label=p.label AND b.current_stage='timesheet_entry')) AS used
+      ${where} ORDER BY p.starts_on DESC,p.id DESC LIMIT ? OFFSET ?`, [...args,query.pageSize,query.offset])
+    return res.json({ rows,total:Number(count?.total || 0),page:query.page,pageSize:query.pageSize })
   } catch (error) { next(error) }
 })
 
@@ -883,11 +954,38 @@ app.post('/api/hr/manager-accounts', requireHR, async (req: AuthenticatedRequest
   } catch (error: any) { await connection.rollback(); if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That email already has an account.' }); next(error) } finally { connection.release() }
 })
 
+function reportingPeriodInput(body: any) {
+  const label = String(body?.label || '').trim(); const startsOn = String(body?.startsOn || ''); const endsOn = String(body?.endsOn || '')
+  const submissionDeadline = String(body?.submissionDeadline || ''); const standardDailyHours = Number(body?.standardDailyHours ?? 8)
+  if (label.length < 2 || label.length > 40 || !validCalendarDate(startsOn) || !validCalendarDate(endsOn) || !validCalendarDate(submissionDeadline) || startsOn > endsOn || submissionDeadline < startsOn || !Number.isFinite(standardDailyHours) || standardDailyHours <= 0 || standardDailyHours > 24 || Math.round(standardDailyHours * 4) !== standardDailyHours * 4) return null
+  return { label, startsOn, endsOn, submissionDeadline, standardDailyHours }
+}
+
+async function lockReportingPeriods(connection: PoolConnection) {
+  const [[lock]] = await connection.query<RowDataPacket[]>('SELECT GET_LOCK(?, 10) AS acquired', [`pulseai:${dbName}:reporting-periods`.slice(0, 64)])
+  if (Number(lock?.acquired) !== 1) throw new Error('Reporting-period management is busy. Try again.')
+}
+
+async function unlockReportingPeriods(connection: PoolConnection) {
+  await connection.query('SELECT RELEASE_LOCK(?)', [`pulseai:${dbName}:reporting-periods`.slice(0, 64)])
+}
+
+async function reportingPeriodUsage(connection: PoolConnection, id: number, label: string) {
+  const [timesheets] = await connection.query<RowDataPacket[]>('SELECT id FROM timesheets WHERE reporting_period_id = ? OR period_label = ? LIMIT 1 FOR UPDATE', [id,label])
+  const [submissions] = await connection.query<RowDataPacket[]>('SELECT id FROM department_submissions WHERE period_label = ? LIMIT 1 FOR UPDATE', [label])
+  const [invoices] = await connection.query<RowDataPacket[]>('SELECT id FROM invoices WHERE period_label = ? LIMIT 1 FOR UPDATE', [label])
+  const [cycles] = await connection.query<RowDataPacket[]>('SELECT id,current_stage AS currentStage FROM billing_cycles WHERE period_label = ? LIMIT 1 FOR UPDATE', [label])
+  return { used: Boolean(timesheets.length || submissions.length || invoices.length || (cycles[0] && cycles[0].currentStage !== 'timesheet_entry')), cycle: cycles[0] }
+}
+
 app.post('/api/hr/reporting-periods', requireHR, async (req: AuthenticatedRequest, res, next) => {
   const connection = await pool.getConnection()
+  let locked = false
   try {
-    const label = String(req.body?.label || '').trim(); const startsOn = String(req.body?.startsOn || ''); const endsOn = String(req.body?.endsOn || ''); const submissionDeadline = String(req.body?.submissionDeadline || ''); const standardDailyHours = Number(req.body?.standardDailyHours || 8)
-    if (label.length < 2 || label.length > 40 || !validCalendarDate(startsOn) || !validCalendarDate(endsOn) || !validCalendarDate(submissionDeadline) || startsOn > endsOn || submissionDeadline < startsOn || !Number.isFinite(standardDailyHours) || standardDailyHours <= 0 || standardDailyHours > 24) return res.status(400).json({ message: 'Enter a valid label, date range, deadline, and daily hours.' })
+    const input = reportingPeriodInput(req.body)
+    if (!input) return res.status(400).json({ message: 'Enter a valid label, date range, deadline, and daily hours in quarter-hour increments.' })
+    const { label, startsOn, endsOn, submissionDeadline, standardDailyHours } = input
+    await lockReportingPeriods(connection); locked = true
     await connection.beginTransaction()
     const [[overlap]] = await connection.query<RowDataPacket[]>('SELECT id,label FROM reporting_periods WHERE active = TRUE AND starts_on <= ? AND ends_on >= ? LIMIT 1 FOR UPDATE', [endsOn, startsOn])
     if (overlap) { await connection.rollback(); return res.status(409).json({ message: `${overlap.label} already overlaps this date range.` }) }
@@ -896,7 +994,55 @@ app.post('/api/hr/reporting-periods', requireHR, async (req: AuthenticatedReques
     await writeWorkflowAudit(connection, req.actor!, 'Reporting period opened', 'reporting_period', Number(created.insertId), label, null, { startsOn, endsOn, submissionDeadline, standardDailyHours, active: true })
     await connection.commit()
     return res.status(201).json({ reportingPeriodId: created.insertId, message: 'Reporting period opened and its billing cycle started.' })
-  } catch (error: any) { await connection.rollback(); if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That reporting-period label already exists.' }); next(error) } finally { connection.release() }
+  } catch (error: any) { await connection.rollback(); if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That reporting-period label already exists.' }); next(error) } finally { if (locked) await unlockReportingPeriods(connection); connection.release() }
+})
+
+app.patch('/api/hr/reporting-periods/:id', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  const id = Number(req.params.id)
+  const input = reportingPeriodInput(req.body)
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Choose a valid reporting period.' })
+  if (!input) return res.status(400).json({ message: 'Enter a valid label, date range, deadline, and daily hours in quarter-hour increments.' })
+  const connection = await pool.getConnection(); let locked = false
+  try {
+    await lockReportingPeriods(connection); locked = true
+    await connection.beginTransaction()
+    const [[period]] = await connection.query<RowDataPacket[]>(`SELECT id,label,DATE_FORMAT(starts_on,'%Y-%m-%d') AS startsOn,DATE_FORMAT(ends_on,'%Y-%m-%d') AS endsOn,
+      DATE_FORMAT(submission_deadline,'%Y-%m-%d') AS submissionDeadline,standard_daily_hours AS standardDailyHours,active FROM reporting_periods WHERE id = ? FOR UPDATE`, [id])
+    if (!period) { await connection.rollback(); return res.status(404).json({ message: 'Reporting period not found.' }) }
+    if (!period.active) { await connection.rollback(); return res.status(409).json({ message: 'Closed periods cannot be corrected.' }) }
+    const usage = await reportingPeriodUsage(connection,id,period.label)
+    if (usage.used) { await connection.rollback(); return res.status(409).json({ message: 'This period has timesheets, approvals, department submissions, or financial activity. Its details cannot be changed.' }) }
+    if (!usage.cycle) { await connection.rollback(); return res.status(409).json({ message: 'The billing cycle is missing. Contact support before correcting this period.' }) }
+    const [[overlap]] = await connection.query<RowDataPacket[]>('SELECT id,label FROM reporting_periods WHERE id <> ? AND active = TRUE AND starts_on <= ? AND ends_on >= ? LIMIT 1 FOR UPDATE', [id,input.endsOn,input.startsOn])
+    if (overlap) { await connection.rollback(); return res.status(409).json({ message: `${overlap.label} already overlaps this date range.` }) }
+    const before = { label:period.label,startsOn:period.startsOn,endsOn:period.endsOn,submissionDeadline:period.submissionDeadline,standardDailyHours:Number(period.standardDailyHours),active:true }
+    await connection.query('UPDATE billing_cycles SET period_label = ?,starts_on = ?,ends_on = ?,submission_deadline = ? WHERE id = ?', [input.label,input.startsOn,input.endsOn,input.submissionDeadline,usage.cycle.id])
+    await connection.query('UPDATE reporting_periods SET label = ?,starts_on = ?,ends_on = ?,submission_deadline = ?,standard_daily_hours = ? WHERE id = ?', [input.label,input.startsOn,input.endsOn,input.submissionDeadline,input.standardDailyHours,id])
+    await writeWorkflowAudit(connection,req.actor!,'Reporting period corrected','reporting_period',id,input.label,before,{ ...input,active:true })
+    await connection.commit()
+    return res.json({ message: 'Reporting period and billing cycle corrected.' })
+  } catch (error: any) { await connection.rollback(); if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'That reporting-period label already exists.' }); next(error) } finally { if (locked) await unlockReportingPeriods(connection); connection.release() }
+})
+
+app.post('/api/hr/reporting-periods/:id/close', requireHR, async (req: AuthenticatedRequest, res, next) => {
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Choose a valid reporting period.' })
+  const connection = await pool.getConnection(); let locked = false
+  try {
+    await lockReportingPeriods(connection); locked = true
+    await connection.beginTransaction()
+    const [[period]] = await connection.query<RowDataPacket[]>(`SELECT id,label,DATE_FORMAT(starts_on,'%Y-%m-%d') AS startsOn,active FROM reporting_periods WHERE id = ? FOR UPDATE`, [id])
+    if (!period) { await connection.rollback(); return res.status(404).json({ message: 'Reporting period not found.' }) }
+    if (!period.active) { await connection.rollback(); return res.status(409).json({ message: 'This reporting period is already closed.' }) }
+    if (period.startsOn <= businessDate()) { await connection.rollback(); return res.status(409).json({ message: 'Only future scheduled periods can be closed. Current and past periods require a separate policy.' }) }
+    const usage = await reportingPeriodUsage(connection,id,period.label)
+    if (usage.used) { await connection.rollback(); return res.status(409).json({ message: 'This period has timesheets, approvals, department submissions, or financial activity and cannot be closed.' }) }
+    if (!usage.cycle) { await connection.rollback(); return res.status(409).json({ message: 'The billing cycle is missing. Contact support before closing this period.' }) }
+    await connection.query('UPDATE reporting_periods SET active = FALSE WHERE id = ?', [id])
+    await writeWorkflowAudit(connection,req.actor!,'Reporting period closed','reporting_period',id,period.label,{ active:true },{ active:false })
+    await connection.commit()
+    return res.json({ message: 'Future reporting period closed. Historical records and billing cycle were preserved.' })
+  } catch (error) { await connection.rollback(); next(error) } finally { if (locked) await unlockReportingPeriods(connection); connection.release() }
 })
 
 app.post('/api/hr/employees', requireHR, async (req: AuthenticatedRequest, res, next) => {
@@ -1172,7 +1318,9 @@ app.post('/api/employee/timesheet/entries', requireEmployee, async (req: Authent
     if (await employeePeriodIsLocked(period, connection)) return res.status(409).json({ message: reportingDeadlinePassed(period) ? 'The submission deadline has passed. Contact your Manager or HR for assistance.' : 'This billing cycle is closed. Contact your Manager or HR for assistance.' })
     const entryDate = String(req.body?.entryDate || ''); const projectId = req.body?.projectId ? Number(req.body.projectId) : null; const activityId = Number(req.body?.activityId); const hours = Number(req.body?.hours); const workDescription = String(req.body?.workDescription || '').trim()
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < String(period.startsOn).slice(0, 10) || entryDate > String(period.endsOn).slice(0, 10)) return res.status(400).json({ message: 'Choose a workday within the active reporting period.' })
-    if (!isWeekday(entryDate) || !Number.isInteger(activityId)) return res.status(400).json({ message: 'Enter a valid weekday and activity.' })
+    if (entryDate > businessDate()) return res.status(400).json({ message: 'Work date cannot be after today.' })
+    if (!isWeekday(entryDate)) return res.status(400).json({ message: 'Work date must be a weekday.' })
+    if (!Number.isInteger(activityId)) return res.status(400).json({ message: 'Choose a valid activity.' })
     if (!validEntryHours(hours)) return res.status(400).json({ message: 'Hours must be greater than 0, at most 24, and in quarter-hour increments.' })
     await connection.beginTransaction()
     const timesheet = await lockedOwnedTimesheet(connection, employee.id, period, true)
@@ -1217,7 +1365,10 @@ app.put('/api/employee/timesheet/entries/:id', requireEmployee, async (req: Auth
     const timesheet = await lockedOwnedTimesheet(connection, employee.id, period)
     if (!timesheet || !employeeCanEdit(timesheet.status)) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet cannot be edited.' }) }
     const entryDate = String(req.body?.entryDate || ''); const projectId = req.body?.projectId ? Number(req.body.projectId) : null; const activityId = Number(req.body?.activityId); const hours = Number(req.body?.hours); const workDescription = String(req.body?.workDescription || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < period.startsOn || entryDate > period.endsOn || !isWeekday(entryDate) || !Number.isInteger(activityId)) { await connection.rollback(); return res.status(400).json({ message: 'Enter a valid weekday and activity within this reporting period.' }) }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate) || entryDate < period.startsOn || entryDate > period.endsOn) { await connection.rollback(); return res.status(400).json({ message: 'Choose a workday within the active reporting period.' }) }
+    if (entryDate > businessDate()) { await connection.rollback(); return res.status(400).json({ message: 'Work date cannot be after today.' }) }
+    if (!isWeekday(entryDate)) { await connection.rollback(); return res.status(400).json({ message: 'Work date must be a weekday.' }) }
+    if (!Number.isInteger(activityId)) { await connection.rollback(); return res.status(400).json({ message: 'Choose a valid activity.' }) }
     if (!validEntryHours(hours)) { await connection.rollback(); return res.status(400).json({ message: 'Hours must be greater than 0, at most 24, and in quarter-hour increments.' }) }
     const [current] = await connection.query<RowDataPacket[]>("SELECT id, project_id AS projectId, activity_id AS activityId, DATE_FORMAT(entry_date, '%Y-%m-%d') AS entryDate FROM timesheet_entries WHERE id = ? AND timesheet_id = ? LIMIT 1", [req.params.id, timesheet.id])
     const currentEntry = current[0]
@@ -1252,7 +1403,8 @@ app.post('/api/employee/timesheet/submit-daily', requireEmployee, async (req: Au
     const [holidays] = await connection.query<RowDataPacket[]>("SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d') AS holidayDate FROM public_holidays WHERE active = TRUE AND holiday_date BETWEEN ? AND ? AND (region = 'default' OR region = ?)", [period.startsOn, period.endsOn, employee.region])
     const [leave] = await connection.query<RowDataPacket[]>("SELECT DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn FROM employee_leave_records WHERE employee_id = ? AND status = 'approved'", [employee.id])
     const dates = new Set(entries.map((entry) => String(entry.entryDate).slice(0, 10)))
-    const missing: string[] = []; for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${String(period.endsOn).slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) { const value = date.toISOString().slice(0, 10); const holiday = holidays.some((item) => String(item.holidayDate).slice(0, 10) === value); const onLeave = leave.some((item) => value >= String(item.startsOn).slice(0, 10) && value <= String(item.endsOn).slice(0, 10)); if (isWeekday(value) && !holiday && !onLeave && !dates.has(value)) missing.push(value) }
+    const warningThrough = period.endsOn < businessDate() ? period.endsOn : businessDate()
+    const missing: string[] = []; for (let date = new Date(`${String(period.startsOn).slice(0, 10)}T00:00:00Z`); date <= new Date(`${warningThrough}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1)) { const value = date.toISOString().slice(0, 10); const holiday = holidays.some((item) => String(item.holidayDate).slice(0, 10) === value); const onLeave = leave.some((item) => value >= String(item.startsOn).slice(0, 10) && value <= String(item.endsOn).slice(0, 10)); if (isWeekday(value) && !holiday && !onLeave && !dates.has(value)) missing.push(value) }
    const nextStatus = timesheet.status === 'returned' || timesheet.status === 'rejected' ? 'resubmitted' : 'submitted'
     const [submitted] = await connection.query<ResultSetHeader>('UPDATE timesheets SET status = ?, assigned_manager_user_id = COALESCE(assigned_manager_user_id, ?), submitted_at = NOW(), return_reason = NULL, version = version + 1 WHERE id = ? AND status = ? AND version = ?', [nextStatus, employee.managerUserId, timesheet.id, timesheet.status, timesheet.version])
     if (!submitted.affectedRows) { await connection.rollback(); return res.status(409).json({ message: 'This timesheet changed before submission. Refresh and try again.' }) }
@@ -1364,7 +1516,7 @@ app.get('/api/manager/team/:id', requireManager, async (req: AuthenticatedReques
 
 app.get('/api/manager/periods', requireManager, async (req: AuthenticatedRequest, res, next) => {
   try {
-    const [periods] = await pool.query<RowDataPacket[]>(`SELECT label AS periodLabel FROM reporting_periods
+    const [periods] = await pool.query<RowDataPacket[]>(`SELECT label AS periodLabel FROM reporting_periods WHERE active = TRUE
       UNION SELECT DISTINCT t.period_label AS periodLabel FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE e.manager_user_id = ?
       ORDER BY periodLabel DESC`, [req.actor!.id])
     return res.json({ periods })
@@ -1494,14 +1646,24 @@ app.get('/api/manager/timesheets', requireManager, async (req: AuthenticatedRequ
   try {
     const status = String(req.query.status || 'all'); const employeeId = req.query.employeeId ? Number(req.query.employeeId) : null; const periodLabel = String(req.query.period || '').trim()
     if (!['all', 'submitted', 'resubmitted'].includes(status)) return res.status(400).json({ message: 'Invalid review status filter.' })
-    const [timesheets] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.period_label AS periodLabel, t.total_hours AS totalHours, t.status, t.submitted_at AS submittedAt, t.return_reason AS returnReason, t.version,
-      e.name AS employeeName, e.employee_code AS employeeCode, d.name AS department, SUM(CASE WHEN f.resolved = FALSE THEN 1 ELSE 0 END) AS findingCount
+    const [timesheets] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.reporting_period_id AS periodId, t.period_label AS periodLabel, t.total_hours AS totalHours, t.status, t.submitted_at AS submittedAt, t.return_reason AS returnReason, t.version,
+      e.id AS employeeId, e.name AS employeeName, e.employee_code AS employeeCode, e.region, d.name AS department, SUM(CASE WHEN f.resolved = FALSE THEN 1 ELSE 0 END) AS findingCount
       FROM timesheets t JOIN employees e ON e.id = t.employee_id JOIN departments d ON d.id = e.department_id
       LEFT JOIN validation_findings f ON f.timesheet_id = t.id
       WHERE COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? AND t.status IN ('submitted', 'resubmitted')
       AND (? = 'all' OR t.status = ?) AND (? IS NULL OR e.id = ?) AND (? = '' OR t.period_label = ?)
       GROUP BY t.id, e.id, d.name ORDER BY t.submitted_at ASC`, [req.actor!.id, status, status, employeeId, employeeId, periodLabel, periodLabel])
-    return res.json({ timesheets })
+    const periodIds = [...new Set(timesheets.map((row) => Number(row.periodId)).filter((id) => id > 0))]
+    const missingByTimesheet = new Map<number, number>()
+    if (periodIds.length) {
+      const [periods] = await pool.query<RowDataPacket[]>(`SELECT id, label, DATE_FORMAT(starts_on, '%Y-%m-%d') AS startsOn, DATE_FORMAT(ends_on, '%Y-%m-%d') AS endsOn FROM reporting_periods WHERE id IN (?)`, [periodIds])
+      for (const period of periods) {
+        const members = timesheets.filter((row) => Number(row.periodId) === Number(period.id)).map((row) => ({ id: row.employeeId, timesheetId: row.id, status: row.status, region: row.region })) as RowDataPacket[]
+        const missingDays = await missingWorkdaysForMembers(members, period, businessDate())
+        for (const row of timesheets) if (Number(row.periodId) === Number(period.id)) missingByTimesheet.set(Number(row.id), missingDays.get(Number(row.employeeId))?.length || 0)
+      }
+    }
+    return res.json({ timesheets: timesheets.map((row) => ({ ...row, missingWorkdayCount: missingByTimesheet.get(Number(row.id)) || 0 })) })
   } catch (error) { next(error) }
 })
 
@@ -1612,8 +1774,8 @@ async function decideManagerTimesheet(req: AuthenticatedRequest, res: Response, 
     if (decision === 'approved') {
       const [financeUsers] = await connection.query<RowDataPacket[]>("SELECT email FROM users WHERE role = 'finance'")
       for (const financeUser of financeUsers) {
-        const [existingNotice] = await connection.query<RowDataPacket[]>('SELECT id FROM notifications WHERE title = ? AND recipient_email = ? AND timesheet_id = ? LIMIT 1', ['Approved work ready for billing', financeUser.email, timesheet.id])
-        if (!existingNotice[0]) await connection.query('INSERT INTO notifications (title, message, notification_type, recipient_email, timesheet_id) VALUES (?, ?, ?, ?, ?)', ['Approved work ready for billing', `${timesheet.employeeName} has approved work in ${timesheet.periodLabel} ready for Finance review.`, 'info', financeUser.email, timesheet.id])
+        const [existingNotice] = await connection.query<RowDataPacket[]>("SELECT id FROM notifications WHERE title IN ('Approved work ready for billing', 'Approved work ready for Finance review') AND recipient_email = ? AND timesheet_id = ? LIMIT 1", [financeUser.email, timesheet.id])
+        if (!existingNotice[0]) await connection.query('INSERT INTO notifications (title, message, notification_type, recipient_email, timesheet_id) VALUES (?, ?, ?, ?, ?)', ['Approved work ready for Finance review', `${timesheet.employeeName} has approved work in ${timesheet.periodLabel} ready for Finance review.`, 'info', financeUser.email, timesheet.id])
       }
     }
     await connection.commit(); return res.json({ message: decision === 'approved' ? 'Timesheet approved.' : 'Timesheet returned to the employee.' })
@@ -1732,10 +1894,18 @@ app.get('/api/director/dashboard', requireDirector, async (req: AuthenticatedReq
       FROM validation_findings v JOIN timesheets t ON t.id = v.timesheet_id JOIN employees e ON e.id = t.employee_id JOIN departments d ON d.id = e.department_id
       WHERE v.resolved = FALSE AND t.reporting_period_id = ? ORDER BY FIELD(v.severity, 'critical', 'warning'), v.created_at DESC LIMIT 5`, [period.id])
     exceptions.push(...missingWorkdayExceptions.slice(0, Math.max(0, 5 - exceptions.length)))
-    const [notifications] = await pool.query<RowDataPacket[]>('SELECT id, title, message, notification_type AS type, read_at AS readAt, created_at AS createdAt FROM notifications WHERE read_at IS NULL AND (recipient_email = ? OR recipient_email IS NULL) ORDER BY created_at DESC LIMIT 5', [req.actor!.email])
+    const [notifications] = await pool.query<RowDataPacket[]>('SELECT id, title, message, notification_type AS type, read_at AS readAt, created_at AS createdAt, timesheet_id AS timesheetId FROM notifications WHERE recipient_email = ? OR recipient_email IS NULL ORDER BY created_at DESC LIMIT 30', [req.actor!.email])
     const [[notificationCount]] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS value FROM notifications WHERE read_at IS NULL AND (recipient_email = ? OR recipient_email IS NULL)', [req.actor!.email])
 
     return res.json({ period: period.label, billingCycle: period.billingCycle, metrics: { employees: Number(employeeCount?.value || 0), submitted: Number(submittedCount?.value || 0), approved: Number(approvedCount?.value || 0), pending: pendingValue, missingWorkdays: missingWorkdayValue, exceptions: Number(exceptionCount?.value || 0) + missingWorkdayExceptions.length, totalHours: Number(hoursSummary?.totalHours || 0), approvedHours: Number(hoursSummary?.approvedHours || 0), completedCount: Number(hoursSummary?.completedCount || 0), timesheetDistribution }, departments, exceptions, notifications, unreadNotificationCount: Number(notificationCount?.value || 0) })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/director/notifications/:id/read', requireDirector, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const [result] = await pool.query<ResultSetHeader>('UPDATE notifications SET read_at = COALESCE(read_at, NOW()) WHERE id = ? AND recipient_email = ?', [req.params.id, req.actor!.email])
+    if (!result.affectedRows) return res.status(404).json({ message: 'Notification not found.' })
+    return res.json({ message: 'Notification marked as read.' })
   } catch (error) { next(error) }
 })
 
@@ -2099,5 +2269,3 @@ initializeDatabase()
     console.error('Database initialization failed:', error instanceof Error ? error.message : error)
     process.exit(1)
   })
-
-

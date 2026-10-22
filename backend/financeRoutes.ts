@@ -2,7 +2,7 @@ import type { Express, NextFunction, Request, RequestHandler, Response } from 'e
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { randomUUID } from 'node:crypto'
 import { activeReportingPeriod, businessDate, previousCalendarDate } from './reportingPeriod.js'
-import { calculateLineAmount, csvCell, financeEntryCanBeInvoiced, financeCanProcessTimesheet, invoiceTransitionAllowed, validCurrency, type InvoiceStatus } from './financeRules.js'
+import { calculateLineAmount, csvCell, financeEntryCanBeInvoiced, financeCanProcessTimesheet, invoiceTransitionAllowed, validCurrency, validRateDate, type InvoiceStatus } from './financeRules.js'
 
 type FinanceRequest = Request & { actor?: { id: number; role: string; email: string } }
 type Filters = { period?: string; projectId?: number; employeeId?: number; clientId?: number; billingStatus?: string; billable?: string }
@@ -17,7 +17,7 @@ async function writeFinanceAudit(connection: Pool | PoolConnection, actorId: num
 async function applicableRate(connection: Pool | PoolConnection, projectId: number, entryDate: string) {
   const [rates] = await connection.query<RowDataPacket[]>(`SELECT id, amount, currency, active, effective_from AS effectiveFrom, effective_to AS effectiveTo
     FROM project_billing_rates WHERE project_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)
-    AND (active = TRUE OR ? < ?) ORDER BY effective_from DESC LIMIT 2 FOR UPDATE`, [projectId, entryDate, entryDate, entryDate, businessDate()])
+    ORDER BY effective_from DESC LIMIT 2 FOR UPDATE`, [projectId, entryDate, entryDate])
   return rates.length === 1 ? rates[0] : null
 }
 
@@ -32,32 +32,44 @@ async function financeEntries(pool: Pool, filters: Filters = {}) {
       emp.id AS employeeId, emp.name AS employeeName, emp.employee_code AS employeeCode,
       a.id AS activityId, a.name AS activityName, a.category AS activityCategory, pa.billable,
       r.id AS rateId, r.amount AS rateAmount, r.currency AS rateCurrency,
-      il.invoice_id AS invoiceId, i.invoice_number AS invoiceNumber, i.status AS invoiceStatus,
+      il.invoice_id AS invoiceId, il.hours_snapshot AS invoicedHours, il.rate_snapshot AS invoicedRate,
+      il.currency_snapshot AS invoicedCurrency, il.amount_snapshot AS invoicedAmount,
+      i.invoice_number AS invoiceNumber, i.status AS invoiceStatus,
       CASE WHEN a.category = 'internal' THEN 'nonbillable' WHEN pa.billable IS NULL THEN 'unclassified' WHEN pa.billable = TRUE THEN 'billable' ELSE 'nonbillable' END AS financialClass,
       CASE WHEN il.id IS NOT NULL THEN i.status WHEN a.category = 'internal' OR pa.billable = FALSE THEN 'not_billable' ELSE 'unbilled' END AS billingStatus
     FROM timesheet_entries e JOIN timesheets t ON t.id = e.timesheet_id AND t.status = 'approved'
     JOIN employees emp ON emp.id = t.employee_id JOIN activities a ON a.id = e.activity_id
     LEFT JOIN projects p ON p.id = e.project_id LEFT JOIN clients c ON c.id = p.client_id
     LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = a.id
-    LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
+    LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date)
     LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id
     WHERE (? = '' OR t.period_label = ?) AND (? IS NULL OR p.id = ?) AND (? IS NULL OR emp.id = ?) AND (? IS NULL OR p.client_id = ?)
       AND (? = 'all' OR COALESCE(i.status, CASE WHEN a.category = 'internal' OR pa.billable = FALSE THEN 'not_billable' ELSE 'unbilled' END) = ?)
       AND (? = 'all' OR (? = 'billable' AND a.category = 'project' AND pa.billable = TRUE) OR (? = 'nonbillable' AND (a.category = 'internal' OR pa.billable = FALSE)) OR (? = 'unclassified' AND a.category = 'project' AND pa.billable IS NULL))
-    ORDER BY e.entry_date DESC, emp.name, p.code, a.name`, [businessDate(), period, period, projectId, projectId, employeeId, employeeId, clientId, clientId, billingStatus, billingStatus, billable, billable, billable, billable])
+    ORDER BY e.entry_date DESC, emp.name, p.code, a.name`, [period, period, projectId, projectId, employeeId, employeeId, clientId, clientId, billingStatus, billingStatus, billable, billable, billable, billable])
   return rows.map((row) => {
     const rateExists = row.rateId != null && String(row.rateCurrency || '') === String(row.clientCurrency || '') && Boolean(row.clientActive)
     const isProjectBillable = row.activityCategory === 'project' && Boolean(row.billable)
     const ready = financeEntryCanBeInvoiced({ timesheetStatus: 'approved', billable: isProjectBillable ? true : row.billable == null ? null : false, hasClient: row.clientId != null && Boolean(row.clientActive), hasRate: rateExists, alreadyLinked: row.invoiceId != null })
-    const amount = rateExists && isProjectBillable ? calculateLineAmount(Number(row.hours), Number(row.rateAmount)) : null
+    const hasInvoice = row.invoiceId != null
+    const amount = hasInvoice ? Number(row.invoicedAmount) : rateExists && isProjectBillable ? calculateLineAmount(Number(row.hours), Number(row.rateAmount)) : null
     let exception: string | null = null
-    if (row.activityCategory === 'project' && row.billable == null) exception = 'Financial classification is not set.'
-    else if (Boolean(row.billable) && !row.clientId) exception = 'Project is not linked to a client.'
-    else if (Boolean(row.billable) && row.clientId && !row.clientActive) exception = 'Client billing configuration is inactive.'
-    else if (Boolean(row.billable) && row.clientId && !row.rateId) exception = 'No billing rate covers this work date.'
-    else if (Boolean(row.billable) && row.rateId && row.clientCurrency !== row.rateCurrency) exception = 'Billing rate currency does not match the client currency.'
-    else if (row.invoiceStatus === 'draft' || row.invoiceStatus === 'ready') exception = 'Work is reserved on an invoice that has not been finalized.'
-    return { ...row, hours: Number(row.hours), billable: row.billable == null ? null : Boolean(row.billable), rateAmount: row.rateAmount == null ? null : Number(row.rateAmount), amount, eligibleForInvoice: ready, exception }
+    if (!hasInvoice) {
+      if (row.activityCategory === 'project' && row.billable == null) exception = 'Financial classification is not set.'
+      else if (Boolean(row.billable) && !row.clientId) exception = 'Project is not linked to a client.'
+      else if (Boolean(row.billable) && row.clientId && !row.clientActive) exception = 'Client billing configuration is inactive.'
+      else if (Boolean(row.billable) && row.clientId && !row.rateId) exception = 'No billing rate covers this work date.'
+      else if (Boolean(row.billable) && row.rateId && row.clientCurrency !== row.rateCurrency) exception = 'Billing rate currency does not match the client currency.'
+    }
+    if (row.invoiceStatus === 'draft' || row.invoiceStatus === 'ready') exception = 'Work is reserved on an invoice that has not been finalized.'
+    return { ...row,
+      hours: hasInvoice ? Number(row.invoicedHours) : Number(row.hours),
+      billable: row.billable == null ? null : Boolean(row.billable),
+      rateAmount: hasInvoice ? Number(row.invoicedRate) : row.rateAmount == null ? null : Number(row.rateAmount),
+      rateCurrency: hasInvoice ? row.invoicedCurrency : row.rateCurrency,
+      amountCurrency: hasInvoice ? row.invoicedCurrency : row.clientCurrency,
+      amountKind: row.invoiceStatus === 'finalized' ? 'billed' : hasInvoice ? 'reserved' : 'estimated',
+      amount, eligibleForInvoice: ready, exception }
   })
 }
 
@@ -84,15 +96,18 @@ async function invoiceLines(connection: Pool | PoolConnection, invoiceId: number
 async function validateInvoiceSnapshot(connection: Pool | PoolConnection, invoice: RowDataPacket) {
   const lines = await invoiceLines(connection, Number(invoice.id), true)
   if (!lines.length) return { lines, problem: 'An invoice needs at least one approved work line.' }
+  const configurationProblem = (entryId: number, rateChanged = false) => invoice.status === 'ready'
+    ? `${rateChanged ? 'The applicable rate' : 'Billing configuration'} changed for source entry ${entryId}. Return this Ready invoice to Draft before cancelling or rebuilding it.`
+    : `${rateChanged ? 'The applicable rate' : 'Billing configuration'} changed for source entry ${entryId}. Cancel and recreate this draft after correcting configuration.`
   for (const line of lines) {
     if (!financeCanProcessTimesheet(line.timesheetStatus)) return { lines, problem: `Source entry ${line.entryId} is no longer Manager-approved.` }
     const [[current]] = await connection.query<RowDataPacket[]>(`SELECT p.client_id AS clientId, c.currency AS clientCurrency, c.active AS clientActive,
       pa.billable, a.category FROM timesheet_entries e JOIN projects p ON p.id = e.project_id LEFT JOIN clients c ON c.id = p.client_id
       JOIN activities a ON a.id = e.activity_id LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = a.id
       WHERE e.id = ? FOR UPDATE`, [line.entryId])
-    if (!current || Number(current.clientId) !== Number(invoice.clientId) || !current.clientActive || current.clientCurrency !== invoice.currency || current.category !== 'project' || !current.billable) return { lines, problem: `Billing configuration changed for source entry ${line.entryId}. Delete and recreate this draft after correcting configuration.` }
+    if (!current || Number(current.clientId) !== Number(invoice.clientId) || !current.clientActive || current.clientCurrency !== invoice.currency || current.category !== 'project' || !current.billable) return { lines, problem: configurationProblem(Number(line.entryId)) }
     const rate = await applicableRate(connection, Number(line.projectId), String(line.entryDate))
-    if (!rate || Number(rate.id) !== Number(line.rateId) || rate.currency !== invoice.currency || Number(rate.amount) !== Number(line.rate)) return { lines, problem: `The applicable rate changed for source entry ${line.entryId}. Delete and recreate this draft.` }
+    if (!rate || Number(rate.id) !== Number(line.rateId) || rate.currency !== invoice.currency || Number(rate.amount) !== Number(line.rate)) return { lines, problem: configurationProblem(Number(line.entryId), true) }
   }
   return { lines, problem: null as string | null }
 }
@@ -120,7 +135,7 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
   })
 
   app.get('/api/finance/periods', financeGuard, async (_req, res, next) => {
-    try { const [periods] = await pool.query<RowDataPacket[]>(`SELECT label AS periodLabel FROM reporting_periods UNION SELECT DISTINCT t.period_label AS periodLabel FROM timesheets t WHERE t.status = 'approved' ORDER BY periodLabel DESC`); return res.json({ periods }) } catch (error) { next(error) }
+    try { const [periods] = await pool.query<RowDataPacket[]>(`SELECT label AS periodLabel FROM reporting_periods WHERE active = TRUE UNION SELECT DISTINCT t.period_label AS periodLabel FROM timesheets t WHERE t.status = 'approved' ORDER BY periodLabel DESC`); return res.json({ periods }) } catch (error) { next(error) }
   })
 
   app.get('/api/finance/options', financeGuard, async (_req, res, next) => {
@@ -184,9 +199,9 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
         FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN timesheet_entries e ON e.project_id = p.id
         LEFT JOIN timesheets t ON t.id = e.timesheet_id LEFT JOIN activities a ON a.id = e.activity_id
         LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = e.activity_id
-        LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
+        LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date)
         LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id
-        GROUP BY p.id, c.id ORDER BY p.active DESC, p.code`, [businessDate()])
+        GROUP BY p.id, c.id ORDER BY p.active DESC, p.code`)
       return res.json({ projects: projects.map((project) => ({ ...project, approvedHours: Number(project.approvedHours), billableHours: Number(project.billableHours), nonBillableHours: Number(project.nonBillableHours), unbilledHours: Number(project.unbilledHours), billedHours: Number(project.billedHours), unbilledAmount: Number(project.unbilledAmount), billedAmount: Number(project.billedAmount) })) })
     } catch (error) { next(error) }
   })
@@ -235,12 +250,18 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
     const connection = await pool.getConnection()
     try {
       const projectId = Number(req.params.id); const amount = Number(req.body?.amount); const currency = String(req.body?.currency || '').trim().toUpperCase(); const effectiveFrom = String(req.body?.effectiveFrom || ''); const effectiveTo = String(req.body?.effectiveTo || '') || null
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000 || !validCurrency(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || (effectiveTo && (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveTo) || effectiveTo < effectiveFrom))) return res.status(400).json({ message: 'Provide a positive rate, three-letter currency, and valid effective dates.' })
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000 || !validCurrency(currency)) return res.status(400).json({ message: 'Provide a positive rate and a three-letter currency.' })
+      if (!validRateDate(effectiveFrom)) return res.status(400).json({ message: 'Effective-from must be a valid calendar date in YYYY-MM-DD format.' })
+      if (effectiveTo && !validRateDate(effectiveTo)) return res.status(400).json({ message: 'Effective-to must be a valid calendar date in YYYY-MM-DD format.' })
+      if (effectiveTo && effectiveTo < effectiveFrom) return res.status(400).json({ message: 'Effective-to cannot be earlier than effective-from.' })
       await connection.beginTransaction()
       const [[project]] = await connection.query<RowDataPacket[]>('SELECT p.id, p.client_id AS clientId, c.currency FROM projects p LEFT JOIN clients c ON c.id = p.client_id WHERE p.id = ? FOR UPDATE', [projectId])
       if (!project) { await connection.rollback(); return res.status(404).json({ message: 'Project not found.' }) }
       if (!project.clientId || !project.currency) { await connection.rollback(); return res.status(409).json({ message: 'Link this project to a client before creating billing rates.' }) }
       if (currency !== project.currency) { await connection.rollback(); return res.status(400).json({ message: `Rate currency must match the client currency (${project.currency}).` }) }
+      const [[finalizedWork]] = await connection.query<RowDataPacket[]>(`SELECT il.id FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id
+        WHERE il.project_id = ? AND i.status = 'finalized' AND il.entry_date >= ? AND (? IS NULL OR il.entry_date <= ?) LIMIT 1 FOR UPDATE`, [projectId, effectiveFrom, effectiveTo, effectiveTo])
+      if (finalizedWork) { await connection.rollback(); return res.status(409).json({ message: 'Rate dates include finalized invoice work. Use dates that preserve its historical billing rate.' }) }
       const [existing] = await connection.query<RowDataPacket[]>('SELECT id, amount, currency, DATE_FORMAT(effective_from, \'%Y-%m-%d\') AS effectiveFrom, DATE_FORMAT(effective_to, \'%Y-%m-%d\') AS effectiveTo, active FROM project_billing_rates WHERE project_id = ? ORDER BY effective_from DESC FOR UPDATE', [projectId])
       const previousOpen = existing.find((rate) => !rate.effectiveTo && String(rate.effectiveFrom) < effectiveFrom && Boolean(rate.active))
       let previousEndDate: string | null = null
@@ -274,8 +295,13 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       if (active && rates.some((rate) => Number(rate.id) !== rateId && String(before.effectiveFrom) <= String(rate.effectiveTo || '9999-12-31'))) { await connection.rollback(); return res.status(409).json({ message: 'Reactivating this rate would overlap another effective billing rate.' }) }
       const [[finalized]] = await connection.query<RowDataPacket[]>("SELECT COUNT(*) AS count FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.billing_rate_id = ? AND i.status = 'finalized'", [rateId])
       if (!active && Number(finalized?.count || 0) && String(before.effectiveFrom) >= businessDate()) { await connection.rollback(); return res.status(409).json({ message: 'This rate is referenced by finalized work and cannot be deactivated for that effective date.' }) }
-      const endDate = active ? null : !before.effectiveTo ? previousCalendarDate(businessDate()) : before.effectiveTo
+      const endDate = active ? null : before.effectiveTo && String(before.effectiveTo) < businessDate() ? before.effectiveTo : previousCalendarDate(businessDate())
       if (!active && endDate < before.effectiveFrom) { await connection.rollback(); return res.status(409).json({ message: 'A rate cannot end before its effective-from date.' }) }
+      if (!active) {
+        const [[affected]] = await connection.query<RowDataPacket[]>(`SELECT il.id FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id
+          WHERE il.billing_rate_id = ? AND i.status = 'finalized' AND il.entry_date > ? LIMIT 1 FOR UPDATE`, [rateId, endDate])
+        if (affected) { await connection.rollback(); return res.status(409).json({ message: 'Ending this rate would remove coverage from finalized invoice work.' }) }
+      }
       await connection.query('UPDATE project_billing_rates SET active = ?, effective_to = ? WHERE id = ?', [active, endDate, rateId])
       await writeFinanceAudit(connection, req.actor!.id, 'billing_rate_state_changed', 'billing_rate', rateId, before, { ...before, active, effectiveTo: endDate })
       await connection.commit(); return res.json({ message: active ? 'Billing rate activated.' : 'Billing rate ended; historical dates remain traceable.' })
@@ -326,8 +352,9 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
         JOIN projects p ON p.id = e.project_id JOIN activities a ON a.id = e.activity_id LEFT JOIN clients c ON c.id = p.client_id
         LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = a.id
         WHERE e.id IN (?) FOR UPDATE`, [entryIds])
-      if (entries.length !== entryIds.length) { await connection.rollback(); return res.status(404).json({ message: 'One or more source entries could not be found.' }) }
-      if (entries.some((entry) => !financeCanProcessTimesheet(entry.timesheetStatus))) { await connection.rollback(); return res.status(409).json({ message: 'Only Manager-approved timesheet entries can be invoiced.' }) }
+      if (entries.length !== entryIds.length || entries.some((entry) => !financeCanProcessTimesheet(entry.timesheetStatus))) {
+        await connection.rollback(); return res.status(409).json({ message: 'Selected entries are not eligible for invoicing. Choose Manager-approved, billable project work from Approved work.' })
+      }
       const invoiceGroups = new Set(entries.map((entry) => `${entry.clientId}|${entry.clientCurrency}|${entry.periodLabel}`))
       if (invoiceGroups.size !== 1) { await connection.rollback(); return res.status(400).json({ message: 'An invoice draft can contain one client, currency, and reporting period at a time.' }) }
       const first = entries[0]
@@ -364,6 +391,20 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
       await writeFinanceAudit(connection, req.actor!.id, 'invoice_marked_ready', 'invoice', Number(invoice.id), { status: invoice.status }, { status: 'ready', lineCount: lines.length })
       await connection.commit(); return res.json({ message: 'Invoice is ready for final review.' })
     } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Billing configuration changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
+  })
+
+  app.post('/api/finance/invoices/:id/reopen', financeGuard, async (req: FinanceRequest, res, next) => {
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const invoice = await invoiceById(connection, Number(req.params.id), true)
+      if (!invoice) { await connection.rollback(); return res.status(404).json({ message: 'Invoice not found.' }) }
+      if (!invoiceTransitionAllowed(invoice.status as InvoiceStatus, 'draft')) { await connection.rollback(); return res.status(409).json({ message: 'Only Ready invoices can be returned to Draft.' }) }
+      const [result] = await connection.query<ResultSetHeader>("UPDATE invoices SET status = 'draft', ready_at = NULL, version = version + 1 WHERE id = ? AND status = 'ready'", [invoice.id])
+      if (!result.affectedRows) { await connection.rollback(); return res.status(409).json({ message: 'Invoice status changed. Reload and retry.' }) }
+      await writeFinanceAudit(connection, req.actor!.id, 'invoice_returned_to_draft', 'invoice', Number(invoice.id), { status: 'ready' }, { status: 'draft' })
+      await connection.commit(); return res.json({ message: 'Invoice returned to Draft for correction.' })
+    } catch (error) { await connection.rollback(); if (financeLockConflict(error)) return res.status(409).json({ message: 'Invoice changed during another Finance action. Refresh and retry.' }); next(error) } finally { connection.release() }
   })
 
   app.post('/api/finance/invoices/:id/finalize', financeGuard, async (req: FinanceRequest, res, next) => {
@@ -418,19 +459,25 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
     try {
       const kind = String(req.params.kind); let headers: string[]; let rows: unknown[][]
       if (['approved-work', 'unbilled-work'].includes(kind)) {
-        const entries = await financeEntries(pool, { period: String(req.query.period || ''), billingStatus: kind === 'unbilled-work' ? 'unbilled' : 'all' }) as any[]
+        const filters: Filters = { period: String(req.query.period || ''), billingStatus: kind === 'unbilled-work' ? 'unbilled' : String(req.query.billingStatus || 'all'), billable: String(req.query.billable || 'all') }
+        if (req.query.projectId) filters.projectId = Number(req.query.projectId)
+        if (req.query.employeeId) filters.employeeId = Number(req.query.employeeId)
+        if (req.query.clientId) filters.clientId = Number(req.query.clientId)
+        const entries = await financeEntries(pool, filters) as any[]
         const selected = kind === 'unbilled-work' ? entries.filter((item) => item.billable && item.eligibleForInvoice) : entries
-        headers = ['Entry ID', 'Timesheet ID', 'Period', 'Date', 'Employee code', 'Employee', 'Project code', 'Project', 'Client', 'Activity', 'Classification', 'Hours', 'Rate', 'Currency', 'Amount', 'Billing status']
-        rows = selected.map((item) => [item.entryId, item.timesheetId, item.periodLabel, item.entryDate, item.employeeCode, item.employeeName, item.projectCode, item.projectName, item.clientName, item.activityName, item.financialClass, item.hours, item.rateAmount, item.rateCurrency, item.amount, item.billingStatus])
+        headers = ['Entry ID', 'Timesheet ID', 'Period', 'Date', 'Employee code', 'Employee', 'Project code', 'Project', 'Client', 'Activity', 'Classification', 'Hours', 'Rate', 'Currency', 'Amount', 'Amount type', 'Billing status']
+        rows = selected.map((item) => [item.entryId, item.timesheetId, item.periodLabel, item.entryDate, item.employeeCode, item.employeeName, item.projectCode, item.projectName, item.clientName, item.activityName, item.financialClass, item.hours, item.rateAmount, item.amountCurrency, item.amount, item.amountKind, item.billingStatus])
       } else if (kind === 'invoice-lines') {
         const [lines] = await pool.query<RowDataPacket[]>(`SELECT i.invoice_number AS invoiceNumber, c.name AS clientName, i.period_label AS periodLabel, i.status,
           il.timesheet_entry_id AS entryId, DATE_FORMAT(il.entry_date, '%Y-%m-%d') AS entryDate, il.employee_code_snapshot AS employeeCode,
           il.employee_name_snapshot AS employeeName, il.project_code_snapshot AS projectCode, il.project_name_snapshot AS projectName,
           il.activity_name_snapshot AS activityName, il.hours_snapshot AS hours, il.rate_snapshot AS rate, il.currency_snapshot AS currency, il.amount_snapshot AS amount
-          FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id JOIN clients c ON c.id = i.client_id WHERE (? = '' OR i.status = ?) ORDER BY i.created_at, il.entry_date`, [req.query.status || '', req.query.status || ''])
+          FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id JOIN clients c ON c.id = i.client_id
+          WHERE (? = '' OR i.status = ?) AND (? = '' OR i.period_label = ?) AND (? = '' OR c.id = ?) AND (? = '' OR i.id = ?)
+          ORDER BY i.created_at, il.entry_date`, [req.query.status || '', req.query.status || '', req.query.period || '', req.query.period || '', req.query.clientId || '', req.query.clientId || '', req.query.invoiceId || '', req.query.invoiceId || ''])
         headers = ['Invoice', 'Client', 'Period', 'Invoice status', 'Entry ID', 'Date', 'Employee code', 'Employee', 'Project code', 'Project', 'Activity', 'Hours', 'Rate', 'Currency', 'Amount']; rows = lines.map((line) => [line.invoiceNumber, line.clientName, line.periodLabel, line.status, line.entryId, line.entryDate, line.employeeCode, line.employeeName, line.projectCode, line.projectName, line.activityName, line.hours, line.rate, line.currency, line.amount])
       } else if (kind === 'invoices') {
-        const [invoices] = await pool.query<RowDataPacket[]>('SELECT i.invoice_number AS invoiceNumber, c.code AS clientCode, c.name AS clientName, i.period_label AS periodLabel, i.status, i.subtotal, i.currency, i.created_at AS createdAt, i.finalized_at AS finalizedAt FROM invoices i JOIN clients c ON c.id = i.client_id ORDER BY i.created_at DESC')
+        const [invoices] = await pool.query<RowDataPacket[]>('SELECT i.invoice_number AS invoiceNumber, c.code AS clientCode, c.name AS clientName, i.period_label AS periodLabel, i.status, i.subtotal, i.currency, i.created_at AS createdAt, i.finalized_at AS finalizedAt FROM invoices i JOIN clients c ON c.id = i.client_id WHERE (? = \'\' OR i.status = ?) AND (? = \'\' OR i.period_label = ?) AND (? = \'\' OR c.id = ?) ORDER BY i.created_at DESC', [req.query.status || '', req.query.status || '', req.query.period || '', req.query.period || '', req.query.clientId || '', req.query.clientId || ''])
         headers = ['Invoice', 'Client code', 'Client', 'Period', 'Status', 'Subtotal', 'Currency', 'Created', 'Finalized']; rows = invoices.map((invoice) => [invoice.invoiceNumber, invoice.clientCode, invoice.clientName, invoice.periodLabel, invoice.status, invoice.subtotal, invoice.currency, invoice.createdAt, invoice.finalizedAt])
       } else if (kind === 'project-summary') {
         const [projects] = await pool.query<RowDataPacket[]>(`SELECT p.code AS projectCode, p.name AS projectName, c.code AS clientCode, c.name AS clientName, c.currency,
@@ -443,13 +490,16 @@ export function registerFinanceRoutes(app: Express, pool: Pool, financeGuard: Re
           COALESCE(SUM(CASE WHEN i.status = 'finalized' THEN il.amount_snapshot ELSE 0 END), 0) AS billedAmount
           FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN timesheet_entries e ON e.project_id = p.id LEFT JOIN timesheets t ON t.id = e.timesheet_id
           LEFT JOIN activities a ON a.id = e.activity_id LEFT JOIN project_activity_assignments pa ON pa.project_id = p.id AND pa.activity_id = e.activity_id
-          LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date) AND (r.active = TRUE OR e.entry_date < ?)
-          LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id GROUP BY p.id, c.id ORDER BY p.code`, [businessDate()])
+          LEFT JOIN project_billing_rates r ON r.project_id = p.id AND r.effective_from <= e.entry_date AND (r.effective_to IS NULL OR r.effective_to >= e.entry_date)
+          LEFT JOIN invoice_lines il ON il.timesheet_entry_id = e.id LEFT JOIN invoices i ON i.id = il.invoice_id GROUP BY p.id, c.id ORDER BY p.code`)
         headers = ['Project code', 'Project', 'Client code', 'Client', 'Currency', 'Approved hours', 'Billable hours', 'Non-billable hours', 'Unbilled hours', 'Billed hours', 'Unbilled amount', 'Billed amount']
         rows = projects.map((project) => [project.projectCode, project.projectName, project.clientCode, project.clientName, project.currency, project.approvedHours, project.billableHours, project.nonBillableHours, project.unbilledHours, project.billedHours, project.unbilledAmount, project.billedAmount])
       } else return res.status(404).json({ message: 'Choose approved-work, unbilled-work, invoice-lines, invoices, or project-summary.' })
       const csv = [headers, ...rows].map((line) => line.map(csvCell).join(',')).join('\r\n')
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="pulseai-${kind}-${businessDate()}.csv"`); return res.send(`\uFEFF${csv}`)
+      const filterSuffix = ['period', 'status', 'billingStatus', 'billable', 'projectId', 'employeeId', 'clientId', 'invoiceId']
+        .map((key) => String(req.query[key] || '')).filter((value) => value && value !== 'all')
+        .map((value) => value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)).filter(Boolean).join('-')
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="pulseai-${kind}${filterSuffix ? `-${filterSuffix}` : ''}-${businessDate()}.csv"`); return res.send(`\uFEFF${csv}`)
     } catch (error) { next(error) }
   })
 }

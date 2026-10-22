@@ -15,3 +15,13 @@
 .employee-table-wrap{scrollbar-color:var(--employee-teal) var(--employee-canvas);scrollbar-width:thin}
 .coverage-track span{width:100%!important;transform-origin:left center;transition:transform .28s cubic-bezier(.2,.8,.2,1)!important}
 @media(max-width:700px){.employee-content{padding-inline:16px}.employee-sidebar nav button{min-height:44px}.employee-table-wrap{overscroll-behavior-inline:contain}.entry-form input,.entry-form select,.entry-form textarea,.manager-filters select,.inline-form input,.inline-form select{font-size:16px}}
+
+.employee-header-actions{display:flex;align-items:center;gap:8px}.employee-mobile-signout{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid var(--employee-line);border-radius:6px;background:#fff;color:#3f6072;cursor:pointer}.employee-allocation .allocation-list small{display:block;margin-top:4px;color:var(--employee-muted);font-size:11px;line-height:1.4}@media(max-width:700px){.employee-app .employee-sidebar{top:auto;bottom:0}.employee-mobile-signout{display:flex}}
+
+@media(max-width:700px){
+  .manager-app{padding-bottom:82px}
+  .manager-app .employee-sidebar nav{display:flex;grid-template-columns:none;align-items:center;width:100%;height:100%;gap:4px;overflow-x:auto;overflow-y:hidden;padding:0 1px 2px;scrollbar-width:thin}
+  .manager-app .employee-sidebar nav button{flex:0 0 auto;min-height:44px;white-space:nowrap;padding:8px 11px}
+  .manager-app .manager-header-actions{display:flex;align-items:center;gap:8px}
+  .manager-app .manager-header-actions .employee-mobile-signout{display:flex;flex:0 0 40px;width:40px;height:40px}
+}

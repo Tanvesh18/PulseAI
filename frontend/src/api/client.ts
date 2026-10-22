@@ -14,10 +14,10 @@ export function handleUnauthorized(status: number) {
   return true
 }
 
-type ApiOptions = RequestInit & { timeoutMs?: number; fallbackMessage?: string }
+type ApiOptions = RequestInit & { timeoutMs?: number; fallbackMessage?: string; skipUnauthorizedHandling?: boolean }
 
 export async function requestJson<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
-  const { timeoutMs = 20000, fallbackMessage = 'The server could not complete this request.', ...requestOptions } = options
+  const { timeoutMs = 20000, fallbackMessage = 'The server could not complete this request.', skipUnauthorizedHandling = false, ...requestOptions } = options
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -28,7 +28,7 @@ export async function requestJson<T = any>(path: string, options: ApiOptions = {
       try { data = JSON.parse(text) }
       catch { data = { message: response.ok ? 'The server returned an unreadable response.' : fallbackMessage } }
     }
-    if (handleUnauthorized(response.status)) throw new Error('Your session has expired. Please sign in again.')
+    if (!skipUnauthorizedHandling && handleUnauthorized(response.status)) throw new Error('Your session has expired. Please sign in again.')
     if (!response.ok) throw new Error(data.message || (response.status === 429 ? 'Too many requests. Wait a moment and try again.' : fallbackMessage))
     return data as T
   } catch (error) {

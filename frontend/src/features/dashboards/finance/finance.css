@@ -2,3 +2,5 @@
 @media(prefers-reduced-motion:reduce){.finance-loading span{animation:none}.finance-app *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
 .finance-sidebar nav button,.finance-user button,.finance-button,.finance-link{min-height:44px}.finance-sidebar nav button:focus-visible,.finance-user button:focus-visible,.finance-button:focus-visible,.finance-link:focus-visible,.finance-table-wrap:focus-visible{outline:3px solid rgba(101,199,181,.34);outline-offset:2px}.finance-table-wrap{scrollbar-color:var(--f-teal) var(--f-canvas);scrollbar-width:thin}.finance-app ::selection{background:rgba(23,110,101,.2);color:var(--f-ink)}
 @media(max-width:700px){.finance-sidebar nav button{min-height:52px}.finance-filters input,.finance-filters select,.finance-rate-form input,.finance-rate-form select,.finance-project-client select{font-size:16px}}
+.finance-mobile-signout{display:none!important}
+@media(max-width:700px){.finance-sidebar{top:auto!important;bottom:0}.finance-mobile-signout{display:inline-flex!important;align-items:center;justify-content:center;gap:5px}}

@@ -7,17 +7,21 @@ import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import { createTestPeriod } from './testPeriod.js'
+import { isolatedIntegrationDatabaseName } from './integrationDatabase.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
 
 test('Employee daily timesheet boundary and state workflow against HTTP and MySQL', { skip: !enabled }, async () => {
-  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
+  const testDatabaseName = isolatedIntegrationDatabaseName()
+  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD || '', database: testDatabaseName, dateStrings: true })
+  const [[databaseIdentity]] = await db.query<any[]>('SELECT DATABASE() AS name')
+  assert.equal(databaseIdentity.name, testDatabaseName, 'Employee integration tests must use the explicitly isolated database.')
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`
   const password = `Employee-${suffix}-Pass!`
   const managerEmail = `employee-manager-${suffix}@pulseai.integration`
   const employeeEmail = `employee-check-${suffix}@pulseai.integration`
-  let server: ChildProcess | undefined; let port = 0; let periodId = 0; let managerId = 0; let employeeUserId = 0; let employeeId = 0; let activityId = 0; let secondActivityId = 0; let thirdActivityId = 0; let timesheetId = 0; let output = ''
+  let server: ChildProcess | undefined; let port = 0; let periodId = 0; let departmentId = 0; let managerId = 0; let employeeUserId = 0; let employeeId = 0; let activityId = 0; let secondActivityId = 0; let thirdActivityId = 0; let timesheetId = 0; let output = ''
   const request = async (path: string, token = '', method = 'GET', body?: object, signal?: AbortSignal) => {
     const response = await fetch(`http://127.0.0.1:${port}/api${path}`, { method, signal, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
     return { status: response.status, data: await response.json() as any }
@@ -28,12 +32,12 @@ test('Employee daily timesheet boundary and state workflow against HTTP and MySQ
     return row && { status: row.status as string, total: Number(row.totalHours), entries: Number(row.entryCount), sum: Number(row.entryHours), version: Number(row.version) }
   }
   try {
-    const period = await createTestPeriod(db, suffix); periodId = period.id
-    const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1'); assert.ok(department)
+    const period = await createTestPeriod(db, suffix, 7); periodId = period.id
+    const [department] = await db.query<mysql.ResultSetHeader>('INSERT INTO departments (code,name) VALUES (?,?)', [`ET-${suffix}`, 'Employee integration test']); departmentId = department.insertId
     const hash = await bcrypt.hash(password, 6)
     const [manager] = await db.query<mysql.ResultSetHeader>('INSERT INTO users (name,email,password_hash,role,auth_provider) VALUES (?,?,?,?,?)', ['Employee test manager',managerEmail,hash,'manager','password']); managerId = manager.insertId
     const [user] = await db.query<mysql.ResultSetHeader>('INSERT INTO users (name,email,password_hash,role,auth_provider) VALUES (?,?,?,?,?)', ['Employee test',employeeEmail,hash,'employee','password']); employeeUserId = user.insertId
-    const [employee] = await db.query<mysql.ResultSetHeader>('INSERT INTO employees (employee_code,name,email,department_id,manager_name,manager_user_id,user_id,active) VALUES (?,?,?,?,?,?,?,TRUE)', [`ET-${suffix}`,'Employee test',employeeEmail,department.id,'Employee test manager',managerId,employeeUserId]); employeeId = employee.insertId
+    const [employee] = await db.query<mysql.ResultSetHeader>('INSERT INTO employees (employee_code,name,email,department_id,manager_name,manager_user_id,user_id,active) VALUES (?,?,?,?,?,?,?,TRUE)', [`ET-${suffix}`,'Employee test',employeeEmail,departmentId,'Employee test manager',managerId,employeeUserId]); employeeId = employee.insertId
     const [activity] = await db.query<mysql.ResultSetHeader>("INSERT INTO activities (name,category,active) VALUES (?, 'internal', TRUE)", [`Employee test activity ${suffix}`]); activityId = activity.insertId
     const [secondActivity] = await db.query<mysql.ResultSetHeader>("INSERT INTO activities (name,category,active) VALUES (?, 'internal', TRUE)", [`Employee test second activity ${suffix}`]); secondActivityId = secondActivity.insertId
     const [thirdActivity] = await db.query<mysql.ResultSetHeader>("INSERT INTO activities (name,category,active) VALUES (?, 'internal', TRUE)", [`Employee test third activity ${suffix}`]); thirdActivityId = thirdActivity.insertId
@@ -52,6 +56,13 @@ test('Employee daily timesheet boundary and state workflow against HTTP and MySQ
     const entryDate = workday.toISOString().slice(0, 10)
     assert.ok(entryDate <= period.endsOn, 'Test period must contain a weekday')
     const valid = { entryDate, projectId: null, activityId, hours: 8, workDescription: 'Normal work' }
+    const future = new Date(`${period.endsOn}T00:00:00Z`)
+    while ([0, 6].includes(future.getUTCDay())) future.setUTCDate(future.getUTCDate() - 1)
+    const futureDate = future.toISOString().slice(0, 10)
+    assert.ok(futureDate > (await request('/employee/timesheet', employeeToken)).data.businessDate)
+    const futureCreate = await request('/employee/timesheet/entries', employeeToken, 'POST', { ...valid, entryDate: futureDate })
+    assert.equal(futureCreate.status, 400)
+    assert.equal(futureCreate.data.message, 'Work date cannot be after today.')
     for (const [label, body] of [
       ['missing date', { ...valid, entryDate: undefined }], ['missing activity', { ...valid, activityId: undefined }],
       ['missing hours', { ...valid, hours: undefined }], ['zero hours', { ...valid, hours: 0 }],
@@ -62,6 +73,9 @@ test('Employee daily timesheet boundary and state workflow against HTTP and MySQ
     if (timesheetId) { const emptyState = await state(); assert.equal(emptyState.entries, 0); assert.equal(emptyState.total, 0); assert.equal((await request('/employee/timesheet/submit-daily', employeeToken, 'POST')).status, 400) }
     const created = await request('/employee/timesheet/entries', employeeToken, 'POST', valid); assert.equal(created.status, 201, JSON.stringify(created.data))
     const loaded = await request('/employee/timesheet', employeeToken); timesheetId = Number(loaded.data.timesheet.id); const entryId = Number(loaded.data.entries[0].id)
+    const futureUpdate = await request(`/employee/timesheet/entries/${entryId}`, employeeToken, 'PUT', { ...valid, entryDate: futureDate })
+    assert.equal(futureUpdate.status, 400)
+    assert.equal(futureUpdate.data.message, 'Work date cannot be after today.')
     assert.equal(loaded.data.entries.length, 1); assert.deepEqual(await state(), { status: 'draft', total: 8, entries: 1, sum: 8, version: Number(loaded.data.timesheet.version) })
     assert.equal((await request('/employee/timesheet/entries', employeeToken, 'POST', valid)).status, 409)
     assert.equal((await request(`/employee/timesheet/entries/${entryId}`, employeeToken, 'PUT', { ...valid, hours: 6 })).status, 200)
@@ -108,6 +122,7 @@ test('Employee daily timesheet boundary and state workflow against HTTP and MySQ
     if (server && server.exitCode === null) { server.kill(); await new Promise<void>(resolveExit => { const timer = setTimeout(resolveExit, 3000); server?.once('exit', () => { clearTimeout(timer); resolveExit() }) }) }
     if (timesheetId) { await db.query('DELETE FROM notifications WHERE timesheet_id=?', [timesheetId]); await db.query('DELETE FROM audit_events WHERE entity_type=? AND entity_id=?', ['timesheet',timesheetId]); await db.query('DELETE FROM timesheet_audit_events WHERE timesheet_id=?', [timesheetId]); await db.query('DELETE FROM timesheet_entries WHERE timesheet_id=?', [timesheetId]); await db.query('DELETE FROM timesheets WHERE id=?', [timesheetId]) }
     if (employeeId) await db.query('DELETE FROM employees WHERE id=?', [employeeId])
+    if (departmentId) await db.query('DELETE FROM departments WHERE id=?', [departmentId])
     for (const id of [activityId,secondActivityId,thirdActivityId].filter(Boolean)) await db.query('DELETE FROM activities WHERE id=?', [id])
     if (managerId && employeeUserId) await db.query('DELETE FROM users WHERE id IN (?,?)', [managerId,employeeUserId])
     if (periodId) await db.query('DELETE FROM reporting_periods WHERE id=?', [periodId])

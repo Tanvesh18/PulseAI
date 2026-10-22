@@ -110,10 +110,10 @@ add('get', '/api/auth/github/callback', 'GitHub OAuth callback', {
 
 add('get', '/api/employee/dashboard', 'Get employee dashboard', { response: { employee: 'object', period: 'string', standardHours: 'number', timesheet: 'nullable:object', history: 'array:object', notifications: 'array:object' } })
 add('get', '/api/employee/timesheet', 'Get active timesheet and entry options', { response: { employee: 'object', period: 'object', billingCycle: 'nullable:object', timesheet: 'nullable:object', entries: 'array:object', projects: 'array:object', activities: 'array:object', projectActivities: 'array:object', holidays: 'array:object', leave: 'array:object', audit: 'array:object', notifications: 'array:object', history: 'array:object' } })
-add('post', '/api/employee/timesheet/entries', 'Add a daily work entry', { body: entryBody, required: ['entryDate', 'activityId', 'hours'], status: 201, description: 'Entry date must be a weekday in the active period. Project activities require an assigned project; internal activities do not use projectId. Hours must be > 0 and <= 24.' })
-add('put', '/api/employee/timesheet/entries/{id}', 'Update a daily work entry', { body: entryBody, required: ['entryDate', 'activityId', 'hours'] })
+add('post', '/api/employee/timesheet/entries', 'Add a daily work entry', { body: entryBody, required: ['entryDate', 'activityId', 'hours'], status: 201, description: 'Entry date must be a weekday in the active period and cannot be after the current business date. Project activities require an assigned project; internal activities do not use projectId. Hours must be > 0 and <= 24.' })
+add('put', '/api/employee/timesheet/entries/{id}', 'Update a daily work entry', { body: entryBody, required: ['entryDate', 'activityId', 'hours'], description: 'The new work date must be a weekday in the active period and cannot be after the current business date.' })
 add('delete', '/api/employee/timesheet/entries/{id}', 'Delete a daily work entry')
-add('post', '/api/employee/timesheet/submit-daily', 'Submit the active timesheet', { response: { message: 'string', warnings: 'array:date' }, description: 'Requires at least one entry. Warnings contain missing workday dates.' })
+add('post', '/api/employee/timesheet/submit-daily', 'Submit the active timesheet', { response: { message: 'string', warnings: 'array:date' }, description: 'Requires at least one entry. Warnings contain missing workdays through the current business date.' })
 add('post', '/api/employee/notifications/{id}/read', 'Mark employee notification as read', { response: notificationResponse })
 add('post', '/api/employee/timesheet/draft', 'Legacy draft action', { status: 410, deprecated: true, description: 'Removed. Use daily entry endpoints.' })
 add('post', '/api/employee/timesheet/submit', 'Legacy submit action', { status: 410, deprecated: true, description: 'Removed. Use submit-daily.' })
@@ -142,10 +142,17 @@ add('post', '/api/manager/notifications/{id}/read', 'Mark manager notification a
 add('get', '/api/manager/department-submission', 'Get department submission status', { response: { department: 'nullable:object', period: 'string', eligible: 'boolean', teamTotal: 'integer', teamApproved: 'integer', submission: 'nullable:object' } })
 add('post', '/api/manager/department-submission', 'Submit department for director approval', { description: 'Every active employee in the department must have a Manager approved timesheet.' })
 
-add('get', '/api/hr/overview', 'Get HR roster and calendar overview', { response: { summary: 'object', employees: 'array:object', departments: 'array:object', managers: 'array:object', leaves: 'array:object', holidays: 'array:object', reportingPeriods: 'array:object' } })
+add('get', '/api/hr/overview', 'Get HR summary and setup options', { response: { summary: 'object', departments: 'array:object', managers: 'array:object', businessDate: 'date', activeReportingPeriod: 'nullable:object' } })
+add('get', '/api/hr/employees', 'Search paginated workforce records', { query: { search: 'string', status: 'enum:all|active|inactive', departmentId: 'id', page: 'integer', pageSize: 'integer:1-50' }, response: { rows: 'array:object', total: 'integer', page: 'integer', pageSize: 'integer' } })
+add('get', '/api/hr/employee-options', 'Search active employees for leave entry', { query: { search: 'string' }, response: { rows: 'array:object' } })
+add('get', '/api/hr/leave', 'Search paginated leave history', { query: { search: 'string', status: 'enum:all|approved|cancelled', page: 'integer', pageSize: 'integer:1-50' }, response: { rows: 'array:object', total: 'integer', page: 'integer', pageSize: 'integer' } })
+add('get', '/api/hr/holidays', 'Search paginated holiday history', { query: { search: 'string', status: 'enum:all|active|inactive', page: 'integer', pageSize: 'integer:1-50' }, response: { rows: 'array:object', total: 'integer', page: 'integer', pageSize: 'integer' } })
+add('get', '/api/hr/reporting-periods', 'Search paginated reporting periods', { query: { search: 'string', status: 'enum:all|active|closed', page: 'integer', pageSize: 'integer:1-50' }, response: { rows: 'array:object', total: 'integer', page: 'integer', pageSize: 'integer' } })
 add('post', '/api/hr/departments', 'Create a department', { body: { code: 'string', name: 'string' }, required: ['code', 'name'], status: 201, response: { departmentId: 'id', message: 'string' } })
 add('post', '/api/hr/manager-accounts', 'Provision a manager account', { body: { name: 'string', email: 'email', password: 'string' }, required: ['name', 'email', 'password'], status: 201, response: { userId: 'id', message: 'string' } })
 add('post', '/api/hr/reporting-periods', 'Open a reporting period', { body: { label: 'string', startsOn: 'date', endsOn: 'date', submissionDeadline: 'date', standardDailyHours: 'number' }, required: ['label', 'startsOn', 'endsOn', 'submissionDeadline'], status: 201, response: { reportingPeriodId: 'id', message: 'string' } })
+add('patch', '/api/hr/reporting-periods/{id}', 'Correct an unused active reporting period and its billing cycle', { body: { label: 'string', startsOn: 'date', endsOn: 'date', submissionDeadline: 'date', standardDailyHours: 'number' }, required: ['label', 'startsOn', 'endsOn', 'submissionDeadline'], response: { message: 'string' } })
+add('post', '/api/hr/reporting-periods/{id}/close', 'Close an unused future reporting period while retaining history and billing cycle', { response: { message: 'string' } })
 add('post', '/api/hr/employees', 'Add an employee to the workforce roster', { body: { employeeCode: 'string', name: 'string', email: 'email', region: 'string', departmentId: 'id', managerUserId: 'id' }, required: ['employeeCode', 'name', 'email', 'departmentId', 'managerUserId'], status: 201, response: { employeeId: 'id', message: 'string' } })
 add('patch', '/api/hr/employees/{id}', 'Update employee roster assignment and status', { body: { departmentId: 'id', managerUserId: 'id', region: 'string', active: 'boolean', reassignPendingReviews: 'boolean' }, response: { message: 'string', pendingReviewsReassigned: 'integer' }, description: 'Pending reviews stay assigned to their original Manager unless reassignPendingReviews is true.' })
 add('post', '/api/hr/leave', 'Record approved leave', { body: { employeeId: 'id', startsOn: 'date', endsOn: 'date', leaveType: 'string', sourceReference: 'string' }, required: ['employeeId', 'startsOn', 'endsOn', 'leaveType'], status: 201, response: { leaveId: 'id', message: 'string' } })
@@ -171,13 +178,14 @@ add('get', '/api/finance/invoices', 'List invoices', { query: { status: 'enum:dr
 add('get', '/api/finance/invoices/{id}', 'Get invoice and line items', { response: { invoice: 'object', lines: 'array:object' } })
 add('post', '/api/finance/invoices', 'Create draft invoice from approved entries', { body: { entryIds: 'array:id' }, required: ['entryIds'], status: 201, response: { invoiceId: 'id', message: 'string' }, description: 'Provide 1 to 250 approved entry IDs for one client, currency, and reporting period.' })
 add('post', '/api/finance/invoices/{id}/ready', 'Mark a draft invoice ready')
+add('post', '/api/finance/invoices/{id}/reopen', 'Return a Ready invoice to Draft for correction')
 add('post', '/api/finance/invoices/{id}/finalize', 'Finalize a ready invoice')
 add('delete', '/api/finance/invoices/{id}', 'Cancel a draft invoice', { description: 'Only draft invoices can be cancelled; this releases their source entries.' })
 add('get', '/api/finance/audit', 'Get finance audit events', { response: { events: 'array:object' } })
 add('get', '/api/finance/notifications', 'Get finance notifications', { response: { notifications: 'array:object' } })
 add('post', '/api/finance/notifications/{id}/read', 'Mark finance notification as read')
 add('get', '/api/finance/exports/{kind}', 'Download finance CSV export', {
-  query: { period: 'string', status: 'enum:draft|ready|finalized|cancelled' },
+  query: { period: 'string', status: 'enum:draft|ready|finalized|cancelled', billingStatus: 'enum:all|unbilled|draft|ready|finalized', billable: 'enum:all|billable|nonbillable|unclassified', projectId: 'id', employeeId: 'id', clientId: 'id', invoiceId: 'id' },
   description: 'kind is approved-work, unbilled-work, invoice-lines, invoices, or project-summary. Returns text/csv rather than JSON.',
   response: {},
 })

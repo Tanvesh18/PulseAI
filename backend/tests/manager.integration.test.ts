@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import { createTestPeriod } from './testPeriod.js'
+import { isolatedIntegrationDatabaseName } from './integrationDatabase.js'
 
 const enabled = process.env.RUN_MYSQL_INTEGRATION === 'true'
 const backendDir = resolve(import.meta.dirname, '..')
@@ -17,7 +18,10 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     if (!value) throw new Error(`Set ${key} in backend/.env to run the MySQL integration test.`)
     return value
   }
-  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'pulseai', dateStrings: true })
+  const testDatabaseName = isolatedIntegrationDatabaseName()
+  const db = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: required('DB_USER'), password: process.env.DB_PASSWORD || '', database: testDatabaseName, dateStrings: true })
+  const [[databaseIdentity]] = await db.query<any[]>('SELECT DATABASE() AS name')
+  assert.equal(databaseIdentity.name, testDatabaseName, 'Manager integration tests must use the explicitly isolated database.')
   let server: ChildProcess | undefined; let port = 0; let managerId = 0; let outsiderManagerId = 0; let employeeId = 0; let outsiderEmployeeId = 0; let managerEmail = ''; let outsiderManagerEmail = ''; let employeeEmail = ''; let outsiderEmail = ''; let projectId = 0; let outsiderProjectId = 0; let activityId = 0; let sheetId = 0; let concurrentSheetId = 0; let draftSheetId = 0; let outsiderSheetId = 0; let entryId = 0; let employeeUserId = 0; let outsiderEmployeeUserId = 0; let periodId = 0; let periodLabel = ''; let departmentId = 0; let serverOutput = ''; let auditFailureTrigger = false
   const suffix = `${Date.now()}${Math.floor(Math.random() * 10000)}`
   const testPeriodIds: number[] = []
@@ -28,6 +32,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
   try {
     const period = await createTestPeriod(db, suffix); testPeriodIds.push(period.id)
     const concurrentPeriod = await createTestPeriod(db, suffix, 30); testPeriodIds.push(concurrentPeriod.id)
+    const warningPeriod = await createTestPeriod(db, suffix, 45); testPeriodIds.push(warningPeriod.id)
     const draftPeriod = await createTestPeriod(db, suffix, 60); testPeriodIds.push(draftPeriod.id)
     periodId = Number(period.id); periodLabel = period.label
     const [[department]] = await db.query<any[]>('SELECT id FROM departments ORDER BY id LIMIT 1')
@@ -52,13 +57,14 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     await db.query('INSERT INTO employee_project_assignments (employee_id,project_id,active,starts_on) VALUES (?,?,TRUE,?)', [outsiderEmployeeId, outsiderProjectId, period.startsOn])
     await db.query('INSERT INTO project_activity_assignments (project_id,activity_id,active,created_by_user_id) VALUES (?,?,TRUE,?)', [outsiderProjectId, activityId, outsiderManagerId])
     const entryDate = workday(period.startsOn)
-    const makeTimesheet = async (status: string, hours: number, fixturePeriod = period) => {
+    const makeTimesheet = async (status: string, hours: number, fixturePeriod = period, fixtureDate = entryDate) => {
       const [result] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status,submitted_at) VALUES (?,?,?,?,?,NOW())', [employeeId, fixturePeriod.id, fixturePeriod.label, hours, status])
-      const [entry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [result.insertId, entryDate, projectId, activityId, hours, 'Integration test work'])
+      const [entry] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)', [result.insertId, fixtureDate, projectId, activityId, hours, 'Integration test work'])
       return { timesheetId: result.insertId, entryId: entry.insertId }
     }
     const first = await makeTimesheet('submitted', 8.5); sheetId = first.timesheetId; entryId = first.entryId
     const concurrent = await makeTimesheet('submitted', 7, concurrentPeriod); concurrentSheetId = concurrent.timesheetId
+    await makeTimesheet('submitted', 4, warningPeriod, workday(warningPeriod.startsOn))
     const [outsiderSheetInsert] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [outsiderEmployeeId, periodId, periodLabel, 0, 'draft']); outsiderSheetId = outsiderSheetInsert.insertId
     const [draftInsert] = await db.query<mysql.ResultSetHeader>('INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status) VALUES (?,?,?,?,?)', [employeeId, draftPeriod.id, draftPeriod.label, 0, 'draft']); draftSheetId = draftInsert.insertId
 
@@ -79,6 +85,7 @@ test('Manager and Employee workflow is enforced against MySQL and the HTTP API',
     assert.equal((await request(`/manager/timesheets/${outsiderSheetId}`, managerToken)).status, 404)
     assert.equal((await request(`/manager/timesheets/${outsiderSheetId}/approve`, managerToken, 'POST', { version: 1 })).status, 404)
     const filtered = await request(`/manager/timesheets?status=submitted&employeeId=${employeeId}&period=${encodeURIComponent(periodLabel)}`, managerToken); assert.equal(filtered.status, 200); assert.ok(filtered.data.timesheets.some((item: any) => Number(item.id) === sheetId)); assert.ok(!filtered.data.timesheets.some((item: any) => Number(item.employeeId) === outsiderEmployeeId))
+    const warningQueue = await request(`/manager/timesheets?status=submitted&employeeId=${employeeId}&period=${encodeURIComponent(warningPeriod.label)}`, managerToken); assert.equal(warningQueue.status, 200); assert.ok(Number(warningQueue.data.timesheets[0]?.missingWorkdayCount) > 0, 'Manager queue exposes missing workday warnings separately from validation findings.')
     assert.equal((await request(`/manager/timesheets/${draftSheetId}/approve`, managerToken, 'POST', { version: 1 })).status, 404)
     const periodsWrongTeam = await request('/manager/periods', outsiderToken); assert.equal(periodsWrongTeam.status, 200)
 

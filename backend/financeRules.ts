@@ -19,7 +19,7 @@ export function financeEntryCanBeInvoiced(input: {
 }
 
 export function invoiceTransitionAllowed(from: InvoiceStatus, to: InvoiceStatus) {
-  return (from === 'draft' && to === 'ready') || (from === 'ready' && to === 'finalized')
+  return (from === 'draft' && to === 'ready') || (from === 'ready' && (to === 'draft' || to === 'finalized'))
 }
 
 export function calculateLineAmount(hours: number, rate: number) {
@@ -28,6 +28,14 @@ export function calculateLineAmount(hours: number, rate: number) {
 
 export function validCurrency(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Z]{3}$/.test(value)
+}
+
+export function validRateDate(value: unknown) {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && Number(value.slice(0, 4)) >= 1000
+    && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+    && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
 }
 
 export function csvCell(value: unknown) {
