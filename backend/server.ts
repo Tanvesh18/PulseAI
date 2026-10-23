@@ -189,12 +189,16 @@ function validRole(role: unknown): Role | null {
 async function initializeDatabase() {
   if (!railwayDatabase) {
     const bootstrap = await mysql.createConnection(baseDbConfig)
+    const [[bootstrapIdentity]] = await bootstrap.query<RowDataPacket[]>('SELECT DATABASE() AS activeDatabase')
+    if (bootstrapIdentity?.activeDatabase !== null) throw new Error('Database bootstrap unexpectedly selected a database.')
     await bootstrap.query(`CREATE DATABASE IF NOT EXISTS \`${dbName.replace(/`/g, '``')}\``)
     await bootstrap.end()
   }
 
   pool = mysql.createPool({ ...baseDbConfig, database: dbName, waitForConnections: true, connectionLimit: 10 })
   const initLockConnection = await pool.getConnection()
+  const [[databaseIdentity]] = await initLockConnection.query<RowDataPacket[]>('SELECT DATABASE() AS activeDatabase')
+  if (databaseIdentity?.activeDatabase !== dbName) { initLockConnection.release(); throw new Error(`Expected database ${dbName}; refusing schema writes.`) }
   let initLockAcquired = false
   try {
     const lockName = `pulseai:${dbName}:schema-init`.slice(0, 64)

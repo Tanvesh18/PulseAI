@@ -161,6 +161,39 @@ Open `http://localhost:5173` in a browser. Vite proxies `/api` requests to the b
 
 ## Demo Data
 
+### Isolated Northstar enterprise demo
+
+The full stakeholder demo uses the local MySQL database `pulseai_demo`. It does not seed `pulseai` or a QA database. From `backend`, run:
+
+```powershell
+npm.cmd run demo:enterprise
+npm.cmd run demo:verify
+```
+
+The first command creates `backend/.env.demo` with a generated password and JWT secret, checks `SELECT DATABASE()` before database writes, creates the isolated database and schema, and adds deterministic, connected demo records. Repeating it does not duplicate records. Both `.env.demo` files are ignored by Git. Keep `backend/.env.demo` private; its `DEMO_USER_PASSWORD` value is the shared password for the fictional demo accounts. Retrieve it locally with:
+
+```powershell
+Select-String '^DEMO_USER_PASSWORD=' .env.demo
+```
+
+Start the demo backend from `backend`:
+
+```powershell
+$env:DOTENV_CONFIG_PATH=(Resolve-Path .env.demo).Path
+npm.cmd run dev
+```
+
+Start the demo frontend from `frontend` in another terminal:
+
+```powershell
+$env:PULSEAI_API_TARGET='http://127.0.0.1:4100'
+npm.cmd run dev -- --port 5174 --mode demo
+```
+
+Open `http://localhost:5174`. Demo accounts include Employee `arjun.khanna@northstar.example`, Managers `meera.iyer@northstar.example`, `dev.malhotra@northstar.example`, `ritu.sen@northstar.example`, `nikhil.rao@northstar.example`, `lara.bhat@northstar.example`, `omar.sethi@northstar.example`, and `tara.menon@northstar.example`, HR `aisha.kapoor@northstar.example`, Finance `kabir.shah@northstar.example`, and Director `elena.park@northstar.example`. The other employee accounts follow `firstname.lastname@northstar.example` and appear in the HR roster. Demo job titles are stored in the isolated database's `employees.job_title` column; the current roster UI does not display that field. Historical transfers are represented as dated HR audit events before the July reporting period.
+
+The demo contains seven departments, 49 employees, seven Managers, ten projects, five reporting periods, timesheets with daily entries and review history, and an invoice pipeline in USD and INR. June contains a small historical review backlog so every Manager has submitted, approved, and returned work across the demo history. Current period data is dated through October 22, 2026. To use the demo on a later calendar date, adjust its period and daily entry dates before presenting it; the current reporting period is October 2026.
+
 When `SEED_DEMO_DATA=true`, the backend prepares demonstration departments, employees, reporting periods, timesheets, approvals, validation findings, and finance records during startup. Set `DEMO_USER_PASSWORD` to at least eight characters to create a complete set of role logins with that shared password:
 
 For a small, reversible Finance and HR showcase on a database that already has the demo accounts and September 2026 timesheet data, run `npm.cmd run demo:showcase -- --apply` from `backend`. It changes three existing seeded internal entries on Aarav's approved timesheet into billable project work without changing their hours, and adds one client, one project, one rate, one finalized sample invoice, one leave record, and one holiday. The command is idempotent and requires `SEED_DEMO_DATA=true`. It does not create role accounts or run automatically on startup.
