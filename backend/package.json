@@ -5,6 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch server.ts",
+    "demo": "node scripts/runDemo.mjs",
     "start": "node dist/server.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",

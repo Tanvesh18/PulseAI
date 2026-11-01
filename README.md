@@ -163,6 +163,22 @@ Open `http://localhost:5173` in a browser. Vite proxies `/api` requests to the b
 
 ### Isolated Northstar enterprise demo
 
+For everyday use, start the demo in two terminals:
+
+```powershell
+# Terminal 1
+cd backend
+npm run demo
+```
+
+```powershell
+# Terminal 2
+cd frontend
+npm run demo
+```
+
+Open `http://localhost:5174`. The backend command prepares the isolated demo database automatically on first use. MySQL must be running and `backend/.env` must contain working database credentials. Run `npm run demo:verify` from `backend` to check the demo data later.
+
 The full stakeholder demo uses the local MySQL database `pulseai_demo`. It does not seed `pulseai` or a QA database. From `backend`, run:
 
 ```powershell
