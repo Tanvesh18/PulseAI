@@ -177,7 +177,7 @@ cd frontend
 npm run demo
 ```
 
-Open `http://localhost:5174`. The backend command prepares the isolated demo database automatically on first use. MySQL must be running and `backend/.env` must contain working database credentials. Run `npm run demo:verify` from `backend` to check the demo data later.
+Open `http://localhost:5174`. The backend command prepares and updates the isolated demo database automatically. MySQL must be running and `backend/.env` must contain working database credentials. Run `npm run demo:verify` from `backend` to check the demo data later.
 
 The full stakeholder demo uses the local MySQL database `pulseai_demo`. It does not seed `pulseai` or a QA database. From `backend`, run:
 
@@ -208,7 +208,7 @@ npm.cmd run dev -- --port 5174 --mode demo
 
 Open `http://localhost:5174`. Demo accounts include Employee `arjun.khanna@northstar.example`, Managers `meera.iyer@northstar.example`, `dev.malhotra@northstar.example`, `ritu.sen@northstar.example`, `nikhil.rao@northstar.example`, `lara.bhat@northstar.example`, `omar.sethi@northstar.example`, and `tara.menon@northstar.example`, HR `aisha.kapoor@northstar.example`, Finance `kabir.shah@northstar.example`, and Director `elena.park@northstar.example`. The other employee accounts follow `firstname.lastname@northstar.example` and appear in the HR roster. Demo job titles are stored in the isolated database's `employees.job_title` column; the current roster UI does not display that field. Historical transfers are represented as dated HR audit events before the July reporting period.
 
-The demo contains seven departments, 49 employees, seven Managers, ten projects, five reporting periods, timesheets with daily entries and review history, and an invoice pipeline in USD and INR. June contains a small historical review backlog so every Manager has submitted, approved, and returned work across the demo history. Current period data is dated through October 22, 2026. To use the demo on a later calendar date, adjust its period and daily entry dates before presenting it; the current reporting period is October 2026.
+The demo contains seven departments, 49 employees, seven Managers, ten projects, six reporting periods, timesheets with daily entries and review history, and an invoice pipeline in USD and INR. June contains a small historical review backlog so every Manager has submitted, approved, and returned work across the demo history. November 2026 is the current reporting period, with four approved month-opening timesheets, three awaiting Manager review, and draft timesheets ready for daily work. Finance has November billable and non-billable hours, unbilled work, and draft, ready, and finalized sample invoices. Historical October records are dated through October 22, 2026. To use the demo after November 2026, add another current reporting period before presenting it.
 
 When `SEED_DEMO_DATA=true`, the backend prepares demonstration departments, employees, reporting periods, timesheets, approvals, validation findings, and finance records during startup. Set `DEMO_USER_PASSWORD` to at least eight characters to create a complete set of role logins with that shared password:
 

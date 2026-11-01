@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import dotenv from 'dotenv'
@@ -6,11 +5,9 @@ import dotenv from 'dotenv'
 const root = resolve(import.meta.dirname, '..')
 const demoPath = resolve(root, '.env.demo')
 
-if (!existsSync(demoPath)) {
-  console.log('Preparing the demo database for first use...')
-  const setup = spawnSync(process.execPath, [resolve(root, 'scripts/enterpriseDemo.mjs')], { cwd: root, stdio: 'inherit' })
-  if (setup.status !== 0) process.exit(setup.status ?? 1)
-}
+console.log('Checking demo data...')
+const setup = spawnSync(process.execPath, [resolve(root, 'scripts/enterpriseDemo.mjs')], { cwd: root, stdio: 'inherit' })
+if (setup.status !== 0) process.exit(setup.status ?? 1)
 
 const config = dotenv.config({ path: demoPath, quiet: true }).parsed
 if (!config || config.DB_NAME !== 'pulseai_demo' || config.SEED_DEMO_DATA !== 'false' || config.PORT !== '4100') {

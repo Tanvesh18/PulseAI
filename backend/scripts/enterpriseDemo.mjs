@@ -376,6 +376,88 @@ async function addManagerHistory(c) {
     console.log('All Managers have historical submitted and returned work.')
   } catch(error) { await c.rollback();throw error }
 }
+async function addNovemberPeriod(c) {
+  await identity(c,database)
+  if(await one(c,"SELECT seed_key FROM enterprise_demo_seed WHERE seed_key='northstar-november-2026-v1'")) return
+  await c.beginTransaction()
+  try {
+    const label='November 2026'
+    let period=await one(c,'SELECT id FROM reporting_periods WHERE label=?',[label])
+    if(!period) {
+      const id=await put(c,'INSERT INTO reporting_periods (label,starts_on,ends_on,submission_deadline,standard_daily_hours,active) VALUES (?,?,?,?,8,TRUE)',[label,'2026-11-01','2026-11-30','2026-12-05'])
+      period={id}
+    }
+    if(!await one(c,'SELECT id FROM billing_cycles WHERE period_label=?',[label])) {
+      await put(c,'INSERT INTO billing_cycles (period_label,starts_on,ends_on,submission_deadline,current_stage) VALUES (?,?,?,?,?)',[label,'2026-11-01','2026-11-30','2026-12-05','manager_submission'])
+    }
+    const [employees]=await c.query('SELECT id,name,email,user_id,manager_user_id,department_id FROM employees WHERE employee_code LIKE ? AND active=TRUE ORDER BY employee_code',['NS%'])
+    const activity=await one(c,"SELECT id FROM activities WHERE name='Team operations' AND category='internal'")
+    ensure(activity,'Demo team operations activity is missing.')
+    for(let index=0;index<employees.length;index++) {
+      const employee=employees[index]
+      if(await one(c,'SELECT id FROM timesheets WHERE employee_id=? AND reporting_period_id=?',[employee.id,period.id])) continue
+      const onCall=index%7===0
+      const status=onCall?'submitted':'draft'
+      const timesheetId=await put(c,'INSERT INTO timesheets (employee_id,reporting_period_id,period_label,total_hours,status,submitted_at,assigned_manager_user_id,remarks,version) VALUES (?,?,?,?,?,?,?,?,?)',[
+        employee.id,period.id,label,onCall?3:0,status,onCall?'2026-11-01 17:00:00':null,employee.manager_user_id,
+        onCall?'November month-opening support and team handoff.':'Ready for November daily work entries.',onCall?2:1,
+      ])
+      if(onCall) {
+        await put(c,'INSERT INTO timesheet_entries (timesheet_id,entry_date,activity_id,hours,work_description) VALUES (?,?,?,?,?)',[timesheetId,'2026-11-01',activity.id,3,'Handled month-opening on-call support and documented the team handoff.'])
+        await put(c,'INSERT INTO timesheet_audit_events (timesheet_id,actor_user_id,event_type,detail,created_at) VALUES (?,?,?,?,?)',[timesheetId,employee.user_id,'submitted','Submitted November on-call work for Manager review.','2026-11-01 17:00:00'])
+      }
+    }
+    await put(c,'INSERT INTO enterprise_demo_seed (seed_key) VALUES (?)',['northstar-november-2026-v1'])
+    await c.commit()
+    console.log('November reporting period and on-call work prepared.')
+  } catch(error) { await c.rollback();throw error }
+}
+async function addNovemberFinance(c) {
+  await identity(c,database)
+  if(await one(c,"SELECT seed_key FROM enterprise_demo_seed WHERE seed_key='northstar-november-finance-v2'")) return
+  await c.beginTransaction()
+  try {
+    const finance=await one(c,"SELECT id FROM users WHERE email='kabir.shah@northstar.example'")
+    const activity=await one(c,"SELECT id,name FROM activities WHERE name='Client delivery' AND category='project'")
+    ensure(finance&&activity,'Demo finance account or project activity is missing.')
+    const specs=[
+      ['NS001','ASTER-PORTAL','draft'],
+      ['NS008','HARBOR-QA','ready'],
+      ['NS015','HARBOR-INSIGHTS','finalized'],
+      ['NS022','CEDAR-WORKFLOW',null],
+    ]
+    for(const [employeeCode,projectCode,invoiceStatus] of specs) {
+      const row=await one(c,`SELECT t.id AS timesheet_id,t.status,e.name AS employee_name,e.employee_code,e.manager_user_id,
+        p.id AS project_id,p.code AS project_code,p.name AS project_name,p.client_id,
+        cl.code AS client_code,cl.currency,r.id AS rate_id,r.amount AS rate
+        FROM timesheets t JOIN employees e ON e.id=t.employee_id
+        JOIN projects p ON p.code=? JOIN clients cl ON cl.id=p.client_id
+        JOIN project_billing_rates r ON r.project_id=p.id AND r.effective_from<='2026-11-01' AND (r.effective_to IS NULL OR r.effective_to>='2026-11-01')
+        WHERE e.employee_code=? AND t.period_label='November 2026' LIMIT 1`,[projectCode,employeeCode])
+      ensure(row&&row.status==='submitted',`Expected submitted November work for ${employeeCode}.`)
+      const entryId=await put(c,'INSERT INTO timesheet_entries (timesheet_id,entry_date,project_id,activity_id,hours,work_description) VALUES (?,?,?,?,?,?)',[
+        row.timesheet_id,'2026-11-01',row.project_id,activity.id,5,`Completed month-opening client delivery and documented the ${projectCode} handoff.`])
+      await c.query("UPDATE timesheets SET total_hours=8,status='approved',approved_at='2026-11-01 18:00:00',reviewer_user_id=?,version=version+1 WHERE id=?",[row.manager_user_id,row.timesheet_id])
+      await put(c,'INSERT INTO timesheet_audit_events (timesheet_id,actor_user_id,event_type,detail,created_at) VALUES (?,?,?,?,?)',[
+        row.timesheet_id,row.manager_user_id,'approved','November month-opening work approved.','2026-11-01 18:00:00'])
+      if(invoiceStatus) {
+        const invoiceNumber=`NS-DEMO-202611-OVERVIEW-${row.project_code}`
+        const invoiceId=await put(c,'INSERT INTO invoices (invoice_number,client_id,period_label,currency,status,subtotal,created_by_user_id,finalized_by_user_id,ready_at,finalized_at) VALUES (?,?,?,?,?,?,?,?,?,?)',[
+          invoiceNumber,row.client_id,'November 2026',row.currency,invoiceStatus,5*Number(row.rate),finance.id,
+          invoiceStatus==='finalized'?finance.id:null,invoiceStatus==='draft'?null:'2026-11-01 18:30:00',invoiceStatus==='finalized'?'2026-11-01 19:00:00':null])
+        await put(c,'INSERT INTO invoice_lines (invoice_id,timesheet_entry_id,billing_rate_id,project_id,entry_date,employee_name_snapshot,employee_code_snapshot,project_code_snapshot,project_name_snapshot,activity_name_snapshot,hours_snapshot,rate_snapshot,currency_snapshot,amount_snapshot) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[
+          invoiceId,entryId,row.rate_id,row.project_id,'2026-11-01',row.employee_name,row.employee_code,row.project_code,row.project_name,activity.name,5,row.rate,row.currency,5*Number(row.rate)])
+        await put(c,'INSERT INTO finance_audit_events (actor_user_id,action,entity_type,entity_id,after_state) VALUES (?,?,?,?,?)',[
+          finance.id,invoiceStatus==='draft'?'invoice_draft_created':invoiceStatus==='ready'?'invoice_marked_ready':'invoice_finalized','invoice',invoiceId,JSON.stringify({status:invoiceStatus,subtotal:5*Number(row.rate),currency:row.currency,lineCount:1})])
+      }
+    }
+    await put(c,'INSERT INTO notifications (title,message,notification_type,recipient_email) VALUES (?,?,?,?)',[
+      'November billing work ready','Approved November client work and sample invoices are ready for Finance review.','info','kabir.shah@northstar.example'])
+    await put(c,'INSERT INTO enterprise_demo_seed (seed_key) VALUES (?)',['northstar-november-finance-v2'])
+    await c.commit()
+    console.log('November Finance overview and invoice pipeline prepared.')
+  } catch(error) { await c.rollback();throw error }
+}
 async function main() {
   const env=demoEnvironment()
   ensure(['127.0.0.1','localhost','::1'].includes(env.DB_HOST||'127.0.0.1'),'Demo database creation is limited to local MySQL.')
@@ -387,7 +469,7 @@ async function main() {
     await identity(c,database)
     const tables=Number((await one(c,"SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='timesheets'")).count)
     if(!tables) await schema(env)
-    await seed(c,env); await upgradeCurrentFinance(c); await upgradeWorkforceDetails(c); await alignHistoricalDates(c); await addManagerHistory(c)
+    await seed(c,env); await upgradeCurrentFinance(c); await upgradeWorkforceDetails(c); await alignHistoricalDates(c); await addManagerHistory(c); await addNovemberPeriod(c); await addNovemberFinance(c)
   }
   finally { await c.end() }
 }
