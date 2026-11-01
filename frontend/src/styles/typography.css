@@ -1,0 +1,97 @@
+/* Vercel type principles from Inspo, scaled to PulseAI's operational density.
+   Geist is SIL OFL 1.1; color, spacing, and component geometry stay in pulse-design.css. */
+:root {
+  --type-body: 14px;
+  --type-title: 30px;
+  --type-section: 20px;
+  --type-subsection: 16px;
+  --type-control: 13px;
+  --type-label: 12px;
+  --type-table: 12px;
+}
+body { font-family: var(--font-ui); font-size: var(--type-body); line-height: 1.5; font-weight: 400; letter-spacing: 0; }
+:is(.auth-page, .employee-app, .finance-app, .director-app) { font-family: var(--font-ui); font-size: var(--type-body); line-height: 1.5; }
+:is(.auth-page, .employee-app, .finance-app, .director-app) :is(button, input, select, textarea) { font-family: inherit; }
+
+/* A calmer version of Vercel's tight display tracking, sized for dashboards. */
+:is(.employee-header, .finance-header, .content-header) h1 {
+  font-size: var(--type-title);
+  font-weight: 600;
+  line-height: 1.16;
+  letter-spacing: -.04em;
+}
+:is(.employee-app, .finance-app, .director-app) h2 {
+  font-size: var(--type-section);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -.025em;
+}
+:is(.employee-app, .finance-app, .director-app) h3 {
+  font-size: var(--type-subsection);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -.015em;
+}
+:is(.employee-header, .finance-header, .content-header) p,
+:is(.employee-app, .finance-app, .director-app) :is(.header-subtitle, .employee-status p, .editor-heading p, .finance-section-heading p, .card-heading p) {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+/* Data and controls use fewer weights and open line spacing for scanning. */
+:is(.employee-sidebar, .finance-sidebar, .director-sidebar) nav button {
+  font-size: var(--type-control);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+:is(.employee-sidebar, .finance-sidebar, .director-sidebar) nav button.active { font-weight: 600; }
+:is(.employee-app, .finance-app, .director-app) :is(label, dt),
+:is(.auth-page) label {
+  font-size: var(--type-label);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+:is(.employee-app, .finance-app, .director-app, .auth-page) :is(button, input, select, textarea) {
+  font-size: var(--type-control);
+  line-height: 1.43;
+  letter-spacing: 0;
+}
+:is(.employee-app, .finance-app, .director-app) button { font-weight: 500; }
+:is(.employee-app, .finance-app, .director-app) :is(.employee-primary, .employee-secondary, .finance-button, .quiet-button, .table-action, .approval-button),
+.auth-page .primary-button { font-weight: 600; }
+:is(.employee-table-wrap, .finance-table-wrap, .table-wrap) th {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: .025em;
+}
+:is(.employee-table-wrap, .finance-table-wrap, .table-wrap) td {
+  font-size: var(--type-table);
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+:is(.employee-table-wrap, .finance-table-wrap, .table-wrap) td strong { font-size: inherit; font-weight: 600; line-height: inherit; }
+:is(.employee-table-wrap, .finance-table-wrap, .table-wrap) td small { font-size: 11px; line-height: 1.4; }
+:is(.employee-metrics, .manager-metrics, .finance-metrics) dd,
+.metric-card strong { font-size: 24px; font-weight: 600; line-height: 1.15; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+
+/* Authentication keeps its current composition with the same typographic voice. */
+.brand-copy h1 { font-family: var(--font-ui); font-weight: 500; line-height: 1.03; letter-spacing: -.04em; }
+.brand-copy em { font-family: inherit; font-weight: 500; }
+.form-shell header h2 { font-size: 30px; font-weight: 600; line-height: 1.18; letter-spacing: -.035em; }
+.form-shell header p { font-size: 14px; font-weight: 400; line-height: 1.5; }
+.role-card strong, .workspace-card strong { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.role-card small, .workspace-card small { font-size: 11px; font-weight: 400; line-height: 1.4; }
+.auth-page .primary-button { font-size: 14px; line-height: 1.43; }
+
+@media (max-width: 700px) {
+  :root { --type-title: 22px; --type-section: 18px; }
+  :is(.employee-sidebar, .finance-sidebar, .director-sidebar) nav button { font-size: 12px; }
+  :is(.employee-app, .finance-app, .director-app, .auth-page) :is(input, select, textarea) { font-size: 16px; }
+}

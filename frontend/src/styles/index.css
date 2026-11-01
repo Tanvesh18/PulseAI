@@ -1,2 +1,2 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
-:root{--font-ui:"Manrope","Aptos","Segoe UI",ui-sans-serif,system-ui,sans-serif;font-family:var(--font-ui);color:#182333;background:#fbfcfe;font-synthesis:none;text-rendering:optimizeLegibility;font-feature-settings:"kern" 1,"liga" 1}*{box-sizing:border-box}body{margin:0}button,input,textarea,select{font:inherit}
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400..700&display=swap');
+:root{--font-ui:"Geist","Inter","Segoe UI",ui-sans-serif,system-ui,sans-serif;font-family:var(--font-ui);color:#182333;background:#fbfcfe;font-synthesis:none;text-rendering:optimizeLegibility;font-feature-settings:"kern" 1,"liga" 1}*{box-sizing:border-box}body{margin:0}button,input,textarea,select{font:inherit}
