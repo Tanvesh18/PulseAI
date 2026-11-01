@@ -7,9 +7,9 @@ The repository contains a React and TypeScript frontend, an Express and TypeScri
 ## What PulseAI Provides
 
 - Employee timesheet entry, submission, status tracking, and corrections
-- Manager review queues with approve, reject, and return-for-correction decisions
-- HR workforce records, reporting lines, and leave-calendar workflows
-- Finance views for approved work, billing configuration, and invoices
+- Manager review queues with approval and return-for-correction decisions, project assignments, exceptions, and review history
+- HR workforce records, reporting lines, reporting periods, leave, holidays, and account setup
+- Finance views for approved work, billing configuration, invoices, exceptions, audit history, and CSV exports
 - Director oversight for organization-wide compliance, approvals, exceptions, notifications, reports, and audit history
 - Password authentication plus optional Google and GitHub sign-in
 - Server-side role authorization for employee, manager, HR, finance, and director workspaces
@@ -234,23 +234,23 @@ The backend also creates configured Director, Manager, Finance, and HR accounts 
 
 ### Employee
 
-Employees can work with their own active reporting period, enter daily hours and remarks, submit a timesheet, view status history, and respond to returned or rejected entries.
+Employees can work with their own active reporting period, add, edit, and delete daily entries, and submit a timesheet. The workspace shows status history, validation findings, and notifications. Employees can correct returned timesheets and resubmit them.
 
 ### Manager
 
-Managers see the employee records assigned to them and can review submitted or resubmitted timesheets. Decisions require valid workflow state and can include a return reason.
+Managers see their assigned team and review submitted or resubmitted timesheets. They can approve eligible work or return it for correction with a reason. The workspace also provides exceptions, decision history, and notifications. Managers can manage projects, project activities, and employee assignments, and submit a ready department for Director review. Review decisions are subject to ownership, validation, and version checks.
 
 ### HR
 
-HR manages workforce records, reporting lines, leave-related information, and shared employee data used by other workflows.
+HR manages departments, employees, reporting lines, leave records, holidays, and reporting periods used by the other workspaces. HR can create Manager accounts and issue activation codes for eligible employee accounts. Reporting periods can be created, edited, and closed through the HR setup workflow.
 
 ### Finance
 
-Finance works with approved timesheet data, billing configuration, invoice status transitions, and authorized downstream billing preparation.
+Finance reviews Manager-approved work and its billable or non-billable classification. The workspace supports client and project billing configuration, project activity classification, effective-dated rates, and billing exceptions. Eligible entries can be used to create invoice drafts, mark them ready, reopen them, or finalize them. Finance also has audit and notification views and CSV exports for supported reports.
 
 ### Director
 
-Directors receive organization-wide oversight of timesheet compliance, approval progress, exceptions, department drill-down, notifications, reporting, and audit history. Director access is restricted to explicitly configured approved accounts.
+Directors receive organization-wide oversight of timesheet compliance, approval progress, exceptions, department drill-down, notifications, reports, financial summaries, and audit history. They can review department submissions and approve or return them. Director access is restricted to explicitly configured approved accounts.
 
 ## Development Commands
 
@@ -261,6 +261,7 @@ Run commands from the package directory they belong to.
 ```bash
 cd frontend
 npm run dev       # Start Vite with hot reload
+npm run demo      # Start the isolated demo frontend on port 5174
 npm run build     # Type-check and create the production bundle
 npm run lint      # Run Oxlint
 npm run preview   # Serve the production bundle locally
@@ -271,6 +272,7 @@ npm run preview   # Serve the production bundle locally
 ```bash
 cd backend
 npm run dev              # Start the API with tsx watch mode
+npm run demo             # Prepare demo data and start the demo API on port 4100
 npm run build            # Compile the API into backend/dist
 npm start                # Run the compiled API with Node
 npm run typecheck        # Run TypeScript without emitting files
