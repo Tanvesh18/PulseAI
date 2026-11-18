@@ -230,6 +230,14 @@ Use demo seeding only in local, preview, or dedicated demonstration environments
 
 The backend also creates configured Director, Manager, Finance, and HR accounts from the corresponding environment-variable blocks. Employee account creation is enabled when `EMPLOYEE_1_NAME`, `EMPLOYEE_1_EMAIL`, and `EMPLOYEE_1_PASSWORD` are configured and the email matches an active employee roster record.
 
+## Reminders and review delegation
+
+The API generates in-app reminders hourly while it is running. By default, employees with an unsubmitted current-period timesheet are reminded within three days of the submission deadline; Managers receive a daily reminder for submitted reviews awaiting action for at least two days. Reminder deliveries are deduplicated per recipient and day. Set `ENABLE_REMINDERS=false` to disable them, `REMINDER_DAYS_BEFORE` to change the submission window, and `REMINDER_REVIEW_DAYS` to change the review threshold. These are in-app notifications; they do not send email. The API must be running for reminders to be generated.
+
+Managers can grant another active Manager date-limited access to their submitted review queue from Review queue ? Review delegation, and revoke it there. The delegate can review and decide submitted timesheets during the specified dates; delegation does not grant team administration, projects, or department submission access. Decisions record the acting Manager.
+
+Employees can copy entries and save form templates in the current browser. Copy previous week uses entries already visible in the current reporting period and copies eligible dates through today; existing matching entries and future dates are skipped. Each entry is validated independently and failures are reported. Review copied entries before submitting.
+
 ## Available Workspaces
 
 ### Employee

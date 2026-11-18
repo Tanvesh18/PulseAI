@@ -1,0 +1,32 @@
+flowchart TB
+  subgraph HR[HR setup]
+    H[Active employee, Manager and reporting period]
+  end
+  subgraph Employee[Employee]
+    E[Add or edit daily entries]
+    V{Entry valid?}
+    X[Correct entry]
+    T[Save draft; update total and audit]
+    P{Period unlocked, assigned Manager and at least one entry?}
+    S[Submit or resubmit; audit and notify employee and Manager]
+    C[Correct returned timesheet]
+  end
+  subgraph Manager[Assigned Manager]
+    M{Submitted or resubmitted; current version?}
+    J[Refresh or resolve access]
+    K{Approve or return?}
+    G{Entries present, totals match and no critical findings?}
+    A[Approve; audit and notify employee and Finance users]
+    R[Return with reason; audit and notify employee]
+  end
+  H --> E --> V
+  V -->|No| X --> E
+  V -->|Yes| T --> P
+  P -->|No| E
+  P -->|Yes| S --> M
+  M -->|No| J
+  M -->|Yes| K
+  K -->|Approve| G
+  G -->|Yes| A
+  G -->|No| K
+  K -->|Return| R --> C --> E

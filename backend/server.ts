@@ -222,6 +222,8 @@ async function initializeDatabase() {
     UNIQUE KEY uq_users_email (email),
     UNIQUE KEY uq_users_google_sub (google_sub)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
+  await pool.query(`CREATE TABLE IF NOT EXISTS reminder_deliveries (reminder_key VARCHAR(190) NOT NULL PRIMARY KEY, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+  await pool.query(`CREATE TABLE IF NOT EXISTS manager_delegations (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, owner_id BIGINT UNSIGNED NOT NULL, delegate_id BIGINT UNSIGNED NOT NULL, starts_on DATE NOT NULL, ends_on DATE NOT NULL, revoked_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_delegate_dates (delegate_id, starts_on, ends_on, revoked_at), FOREIGN KEY (owner_id) REFERENCES users(id), FOREIGN KEY (delegate_id) REFERENCES users(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
   await pool.query(`CREATE TABLE IF NOT EXISTS departments (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     code VARCHAR(30) NOT NULL,
@@ -1432,7 +1434,7 @@ app.post('/api/employee/notifications/:id/read', requireEmployee, async (req: Au
 
 async function managerOwnsTimesheet(managerId: number, timesheetId: string) {
   const [rows] = await pool.query<RowDataPacket[]>(`SELECT t.id, t.status, t.version, t.total_hours AS totalHours, t.employee_id AS employeeId, e.name AS employeeName, e.email AS employeeEmail, t.period_label AS periodLabel
-    FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? LIMIT 1`, [timesheetId, managerId])
+    FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND (COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? OR (t.status IN ('submitted','resubmitted') AND EXISTS (SELECT 1 FROM manager_delegations md WHERE md.owner_id = COALESCE(t.assigned_manager_user_id,e.manager_user_id) AND md.delegate_id = ? AND md.revoked_at IS NULL AND md.starts_on <= ? AND md.ends_on >= ?))) LIMIT 1`, [timesheetId, managerId, managerId, businessDate(), businessDate()])
   return rows[0]
 }
 
@@ -1461,6 +1463,31 @@ async function notifyManagerOfSubmission(employeeId: number, timesheetId: number
   if (!existing[0]) await pool.query('INSERT INTO notifications (title, message, notification_type, recipient_email, timesheet_id) VALUES (?, ?, ?, ?, ?)', [title, `${employee.name} ${status === 'resubmitted' ? 'resubmitted' : 'submitted'} a ${periodLabel} timesheet for your review.`, 'info', email, timesheetId])
 }
 
+app.get('/api/manager/delegations', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const [managers] = await pool.query<RowDataPacket[]>("SELECT id, name, email FROM users WHERE role='manager' AND active=TRUE AND id<>? ORDER BY name", [req.actor!.id])
+    const [delegations] = await pool.query<RowDataPacket[]>("SELECT md.id, u.name, DATE_FORMAT(md.starts_on,'%Y-%m-%d') AS startsOn, DATE_FORMAT(md.ends_on,'%Y-%m-%d') AS endsOn, md.revoked_at AS revokedAt FROM manager_delegations md JOIN users u ON u.id=md.delegate_id WHERE md.owner_id=? ORDER BY md.id DESC LIMIT 50", [req.actor!.id])
+    return res.json({ managers, delegations })
+  } catch (error) { next(error) }
+})
+app.post('/api/manager/delegations', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection = await pool.getConnection()
+  try {
+    const delegateId=Number(req.body?.delegateId), startsOn=String(req.body?.startsOn || ''), endsOn=String(req.body?.endsOn || '')
+    if (!Number.isInteger(delegateId) || delegateId===req.actor!.id || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(endsOn) || startsOn < businessDate() || endsOn < startsOn || Number.isNaN(Date.parse(`${startsOn}T00:00:00Z`)) || Number.isNaN(Date.parse(`${endsOn}T00:00:00Z`))) return res.status(400).json({ message: 'Choose another Manager and a valid current or future date range.' })
+    await connection.beginTransaction()
+    const [users] = await connection.query<RowDataPacket[]>("SELECT id FROM users WHERE id=? AND role='manager' AND active=TRUE FOR UPDATE", [delegateId])
+    if (!users.length) { await connection.rollback(); return res.status(400).json({message:'Manager is unavailable.'}) }
+    const [result] = await connection.query<ResultSetHeader>('INSERT INTO manager_delegations (owner_id,delegate_id,starts_on,ends_on) VALUES (?,?,?,?)', [req.actor!.id,delegateId,startsOn,endsOn])
+    await writeWorkflowAudit(connection, req.actor!, 'Review delegation created', 'manager_delegation', result.insertId, `Manager ${delegateId}`, null, {delegateId,startsOn,endsOn})
+    await connection.commit(); return res.status(201).json({message:'Review delegation created.'})
+  } catch (error) { await connection.rollback(); next(error) } finally { connection.release() }
+})
+app.post('/api/manager/delegations/:id/revoke', requireManager, async (req: AuthenticatedRequest, res, next) => {
+  const connection=await pool.getConnection()
+  try { await connection.beginTransaction(); const [result]=await connection.query<ResultSetHeader>('UPDATE manager_delegations SET revoked_at=NOW() WHERE id=? AND owner_id=? AND revoked_at IS NULL',[req.params.id,req.actor!.id]); if (!result.affectedRows) { await connection.rollback(); return res.status(404).json({message:'Delegation not found.'}) }; await writeWorkflowAudit(connection,req.actor!,'Review delegation revoked','manager_delegation',Number(req.params.id),'Review delegation',null,{revoked:true}); await connection.commit(); return res.json({message:'Delegation revoked.'}) } catch(error) { await connection.rollback(); next(error) } finally { connection.release() }
+})
+
 app.get('/api/manager/dashboard', requireManager, async (req: AuthenticatedRequest, res, next) => {
   try {
     const period = await activeReportingPeriod(pool); if (!period) return res.status(404).json({ message: 'No active reporting period found.' })
@@ -1480,13 +1507,13 @@ app.get('/api/manager/dashboard', requireManager, async (req: AuthenticatedReque
       if ((missingByEmployee.get(Number(member.employeeId)) || []).length) missingCount++
     }
     if (metrics) metrics.missing = missingCount
-    const [attention] = await pool.query<RowDataPacket[]>(`SELECT t.id AS timesheetId, e.id AS employeeId, e.name AS employeeName, t.status, t.total_hours AS totalHours, t.return_reason AS returnReason,
+    const [attention] = await pool.query<RowDataPacket[]>(`SELECT t.id AS timesheetId, e.id AS employeeId, e.name AS employeeName, t.status, t.total_hours AS totalHours, t.return_reason AS returnReason, t.submitted_at AS submittedAt,
       CASE WHEN t.status IN ('submitted','resubmitted') THEN 'review' WHEN t.status = 'returned' THEN 'correction' ELSE 'missing' END AS kind
       FROM employees e LEFT JOIN timesheets t ON t.employee_id = e.id AND t.reporting_period_id = ?
       WHERE e.manager_user_id = ? AND e.active = TRUE AND (t.id IS NULL OR (t.status IN ('draft','returned','submitted','resubmitted') AND COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ?))
       ORDER BY FIELD(t.status, 'resubmitted','submitted','returned','draft'), e.name LIMIT 12`, [period.id, req.actor!.id, req.actor!.id])
     for (let index = attention.length - 1; index >= 0; index--) { const item = attention[index]; if (item && item.kind === 'missing' && !(missingByEmployee.get(Number(item.employeeId)) || []).length) attention.splice(index, 1) }
-    const [inFlight] = await pool.query<RowDataPacket[]>(`SELECT t.id AS timesheetId, e.id AS employeeId, e.name AS employeeName, t.status, t.total_hours AS totalHours, t.return_reason AS returnReason,
+    const [inFlight] = await pool.query<RowDataPacket[]>(`SELECT t.id AS timesheetId, e.id AS employeeId, e.name AS employeeName, t.status, t.total_hours AS totalHours, t.return_reason AS returnReason, t.submitted_at AS submittedAt,
       CASE WHEN t.status IN ('submitted','resubmitted') THEN 'review' ELSE 'correction' END AS kind
       FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.assigned_manager_user_id = ? AND t.reporting_period_id = ? AND t.status IN ('submitted','resubmitted','returned') AND e.manager_user_id <> ? ORDER BY FIELD(t.status,'resubmitted','submitted','returned'), e.name LIMIT 12`, [req.actor!.id, period.id, req.actor!.id])
     attention.push(...inFlight)
@@ -1654,9 +1681,9 @@ app.get('/api/manager/timesheets', requireManager, async (req: AuthenticatedRequ
       e.id AS employeeId, e.name AS employeeName, e.employee_code AS employeeCode, e.region, d.name AS department, SUM(CASE WHEN f.resolved = FALSE THEN 1 ELSE 0 END) AS findingCount
       FROM timesheets t JOIN employees e ON e.id = t.employee_id JOIN departments d ON d.id = e.department_id
       LEFT JOIN validation_findings f ON f.timesheet_id = t.id
-      WHERE COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? AND t.status IN ('submitted', 'resubmitted')
+      WHERE (COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? OR EXISTS (SELECT 1 FROM manager_delegations md WHERE md.owner_id = COALESCE(t.assigned_manager_user_id,e.manager_user_id) AND md.delegate_id = ? AND md.revoked_at IS NULL AND md.starts_on <= ? AND md.ends_on >= ?)) AND t.status IN ('submitted', 'resubmitted')
       AND (? = 'all' OR t.status = ?) AND (? IS NULL OR e.id = ?) AND (? = '' OR t.period_label = ?)
-      GROUP BY t.id, e.id, d.name ORDER BY t.submitted_at ASC`, [req.actor!.id, status, status, employeeId, employeeId, periodLabel, periodLabel])
+      GROUP BY t.id, e.id, d.name ORDER BY t.submitted_at ASC`, [req.actor!.id, req.actor!.id, businessDate(), businessDate(), status, status, employeeId, employeeId, periodLabel, periodLabel])
     const periodIds = [...new Set(timesheets.map((row) => Number(row.periodId)).filter((id) => id > 0))]
     const missingByTimesheet = new Map<number, number>()
     if (periodIds.length) {
@@ -1746,7 +1773,7 @@ async function decideManagerTimesheet(req: AuthenticatedRequest, res: Response, 
   try {
     await connection.beginTransaction()
     const [ownedRows] = await connection.query<RowDataPacket[]>(`SELECT t.id, t.status, t.version, t.total_hours AS totalHours, t.employee_id AS employeeId, e.name AS employeeName, e.email AS employeeEmail, t.period_label AS periodLabel
-      FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? LIMIT 1 FOR UPDATE`, [req.params.id, req.actor!.id])
+      FROM timesheets t JOIN employees e ON e.id = t.employee_id WHERE t.id = ? AND (COALESCE(t.assigned_manager_user_id, e.manager_user_id) = ? OR (t.status IN ('submitted','resubmitted') AND EXISTS (SELECT 1 FROM manager_delegations md WHERE md.owner_id = COALESCE(t.assigned_manager_user_id,e.manager_user_id) AND md.delegate_id = ? AND md.revoked_at IS NULL AND md.starts_on <= ? AND md.ends_on >= ?))) LIMIT 1 FOR UPDATE`, [req.params.id, req.actor!.id, req.actor!.id, businessDate(), businessDate()])
     const timesheet = ownedRows[0]
     if (!timesheet) { await connection.rollback(); return res.status(404).json({ message: 'A submitted team timesheet was not found.' }) }
     const expectedVersion = Number(req.body?.version)
@@ -2257,9 +2284,22 @@ app.post('/api/auth/google', authRateLimit, async (req: Request<object, object, 
   }
 })
 
+async function generateReminders() {
+  const today = businessDate()
+  const period = await activeReportingPeriod(pool, today)
+  if (!period) return
+  const daysBefore = Math.max(0, Number(process.env.REMINDER_DAYS_BEFORE || 3))
+  const reviewDays = Math.max(1, Number(process.env.REMINDER_REVIEW_DAYS || 2))
+  const [employees] = await pool.query<RowDataPacket[]>(`SELECT e.id,e.email,t.id AS timesheetId FROM employees e LEFT JOIN timesheets t ON t.employee_id=e.id AND t.reporting_period_id=? WHERE e.active=TRUE AND (t.id IS NULL OR t.status IN ('draft','returned','rejected')) AND ? BETWEEN DATE_SUB(?, INTERVAL ? DAY) AND ?`, [period.id,today,period.submissionDeadline,daysBefore,period.submissionDeadline])
+  const [reviews] = await pool.query<RowDataPacket[]>(`SELECT t.id,t.period_label AS periodLabel,e.name,u.email FROM timesheets t JOIN employees e ON e.id=t.employee_id JOIN users u ON u.id=COALESCE(t.assigned_manager_user_id,e.manager_user_id) AND u.active=TRUE AND u.role='manager' WHERE t.status IN ('submitted','resubmitted') AND DATE(t.submitted_at) <= DATE_SUB(?, INTERVAL ? DAY)`, [today,reviewDays])
+  const notices = [...employees.map(e => ({key:`employee:${period.id}:${e.id}:${today}`,email:e.email,id:e.timesheetId || null,title:'Timesheet submission reminder',message:`Submit your ${period.label} timesheet by ${period.submissionDeadline}.`})), ...reviews.map(t => ({key:`review:${t.id}:${today}`,email:t.email,id:t.id,title:'Timesheet review overdue',message:`${t.name}'s ${t.periodLabel} timesheet is awaiting your review.`}))]
+  for (const notice of notices) { const connection=await pool.getConnection(); try { await connection.beginTransaction(); const [inserted]=await connection.query<ResultSetHeader>('INSERT IGNORE INTO reminder_deliveries (reminder_key) VALUES (?)',[notice.key]); if (inserted.affectedRows) await connection.query('INSERT INTO notifications (title,message,notification_type,recipient_email,timesheet_id) VALUES (?,?,?,?,?)',[notice.title,notice.message,'warning',notice.email,notice.id]); await connection.commit() } catch(error) { await connection.rollback(); throw error } finally { connection.release() } }
+}
+
 initializeDatabase()
   .then(() => {
     registerFinanceRoutes(app, pool, requireFinance)
+    if (process.env.ENABLE_REMINDERS !== 'false') { const run = () => { void generateReminders().catch(error => console.error('Reminder generation failed:', error)) }; run(); setInterval(run, 60 * 60 * 1000).unref() }
     app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
       if (process.env.NODE_ENV === 'production') {
         const details = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {}

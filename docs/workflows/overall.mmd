@@ -1,0 +1,41 @@
+flowchart TB
+  subgraph HR[HR]
+    H[Maintain workforce, managers, periods and leave]
+  end
+  subgraph Employee[Employee]
+    E[Enter work and submit timesheet]
+  end
+  subgraph Manager[Manager]
+    M[Review assigned timesheet]
+    D{Approve or return?}
+    A[Manager-approved work]
+    R[Return with reason]
+    Q{All active department employees approved?}
+    S[Submit department for Director review]
+  end
+  subgraph Director[Director]
+    V{Department review}
+    DA[Approve department]
+    DR[Return department with reason]
+  end
+  subgraph Finance[Finance]
+    F[Review approved work and billing setup]
+    I[Create and process invoice]
+  end
+  H --> E --> M --> D
+  D -->|Return| R --> E
+  D -->|Approve| A
+  A --> Q
+  Q -->|Yes| S --> V
+  Q -->|No| M
+  V -->|Approve after readiness check| DA
+  V -->|Return| DR --> S
+  A --> F --> I
+  N[Timesheet audit; employee and Manager notices; Finance notice on approval]
+  W[Department submission and decision audit]
+  FA[Finance and general audit events]
+  E -.-> N
+  D -.-> N
+  S -.-> W
+  V -.-> W
+  I -.-> FA

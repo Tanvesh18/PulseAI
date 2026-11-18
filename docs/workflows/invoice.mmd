@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph Manager[Manager]
+    A[Approve employee timesheet]
+  end
+  subgraph Finance[Finance]
+    E[Select 1 to 250 approved entries]
+    V{Billable project, active client, effective matching rate and unreserved?}
+    X[Resolve billing exceptions or choose other work]
+    G{Same client, currency and period?}
+    D[Draft: lines reserved; audit]
+    C{Snapshot still valid?}
+    R[Mark Ready; audit]
+    L{Snapshot still valid?}
+    F[Finalize and lock; audit]
+    O[Reopen to Draft; audit]
+    Z[Cancel Draft; release entries; audit]
+    B[Correct configuration; cancel and rebuild Draft if needed]
+  end
+  A --> E --> V
+  V -->|No| X --> E
+  V -->|Yes| G
+  G -->|No| E
+  G -->|Create and snapshot| D --> C
+  C -->|Yes| R --> L
+  C -->|No| B --> Z --> E
+  L -->|Yes| F
+  L -->|No| O --> B
+  R -->|Reopen| O --> D
+  D -->|Cancel| Z
