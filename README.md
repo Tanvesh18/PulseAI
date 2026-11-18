@@ -260,6 +260,25 @@ Finance reviews Manager-approved work and its billable or non-billable classific
 
 Directors receive organization-wide oversight of timesheet compliance, approval progress, exceptions, department drill-down, notifications, reports, financial summaries, and audit history. They can review department submissions and approve or return them. Director access is restricted to explicitly configured approved accounts.
 
+## Role-Based Permission Comparison
+
+The table below summarizes the primary responsibilities of each workspace. A checkmark indicates a documented role capability; a dash indicates that the capability is not part of that role's standard workflow.
+
+| Capability | Employee | Manager | HR | Finance | Director |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Record own work | ✓ | — | — | — | — |
+| Approve employee timesheets | — | ✓ | — | — | — |
+| Manage projects and assignments | — | ✓ | — | — | — |
+| Manage workforce records | — | — | ✓ | — | — |
+| Manage reporting periods | — | — | ✓ | — | — |
+| Manage billing rates | — | — | — | ✓ | — |
+| Create and process invoices | — | — | — | ✓ | — |
+| Approve department submissions | — | — | — | — | ✓ |
+| View financial reporting | — | — | — | ✓ | ✓ |
+| View organization-wide audit events | — | — | — | — | ✓ |
+
+**Approval boundary:** Managers approve individual employee timesheets. Directors approve or return department-level submissions; Director approval does not replace Manager approval. Finance invoices eligible Manager-approved billable work independently of the Director department-review decision.
+
 ## Development Commands
 
 Run commands from the package directory they belong to.
